@@ -224,15 +224,26 @@ DEFAULTS: dict[str, Any] = {
         # tests/test_structure.py asserts as the special case.
         "shared_rank": 32,   # m, the shared modes
         "private_rank": 4,   # p, the per-perturbation private rank. 0 = shared only
-        # INITIALISATION, and it is load-bearing. U and P_a start at ZERO, so
-        # A_a = 0 and the initial prediction is exactly the additive baseline. V and
-        # Q_a start small and RANDOM: with both factors of a product at zero the
-        # gradient vanishes for both and the operator never leaves the origin.
-        # c_a starts at ONE, so every perturbation begins using every shared mode
-        # equally and the basis first learns what the perturbations have in common.
+        # INITIALISATION, and it is load-bearing - but the ZERO GOES IN THE READOUT,
+        # NOT HERE. A_a is initialised small and RANDOM (U, V, P_a, Q_a) with c_a at
+        # one, so every perturbation begins using every shared mode equally and the
+        # basis first learns what the perturbations have in common.
+        #
+        # A_a must NOT start at zero. The composition is second order in A, so
+        # dB_S/dA_a is proportional to A_b: with every operator at zero the gradient
+        # of the loss with respect to every operator is also zero and nothing ever
+        # moves. It is the same vanishing-product trap as zeroing both factors of a
+        # low-rank product, one level up.
+        #
+        # What makes the initial prediction exactly the additive baseline is W = 0
+        # (models/readout.py). W is LINEAR, so dL/dW is proportional to B_S Phi(x),
+        # which is non-zero - W moves first and A_a follows once W is non-zero. That
+        # is the zero-initialised-output-layer argument scPKFM used for rho, applied
+        # at the layer where it actually holds.
+        #
         # U diag(c) V is invariant to U -> kU, c -> c/k, so read A_a as a whole and
         # never U or c_a alone.
-        "operator_init_scale": 0.02,  # the std of V and Q_a
+        "operator_init_scale": 0.02,
 
         # --- the composition law ---
         # THE COMPOSITION CLAIM. Summing generators and integrating gives
@@ -265,14 +276,17 @@ DEFAULTS: dict[str, Any] = {
         # Every option is LINEAR IN Phi(x), so the flow map is exactly
         # exp(B_S) and there is no integrator anywhere in this model.
         "composition": "anticommutator",
-        # A single learned scalar on B_S, initialised at zero with U and P_a. It
-        # separates the operator's overall magnitude from its direction in the
-        # ablation tables. NOT a time embedding: scPKFM carried an s(t) MLP whose
-        # only effect was a scalar reparameterisation of a scale the operator
-        # already had, and it is gone.
-        "composition_scale": True,
-        # Hidden width for composition=bilinear only.
-        "composition_hidden": 128,
+        # There is no scalar on B_S and no time embedding. A_a already carries its own
+        # scale through U and c_a, and a separate factor initialised at zero would
+        # reintroduce the vanishing gradient described above. scPKFM's s(t) MLP was a
+        # scalar reparameterisation of a scale the operator already had.
+        #
+        # Rank of G in composition=bilinear: B_S = sum_{a<b} (A_a G A_b + A_b G A_a)
+        # with G = I + U_g V_g and U_g at zero, so that arm STARTS as the
+        # anticommutator and the ablation is nested - it asks whether the
+        # anticommutator specifically is right, or whether any symmetric second-order
+        # form does as well, with the two sharing a starting point.
+        "composition_rank": 16,
 
         # --- the readout: observables back to gene space ---
         # THE PATHWAY-MEDIATION CLAIM. W is non-zero only where KEGG says a gene
