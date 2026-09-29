@@ -35,7 +35,7 @@ def to_celleval_label(condition: str, naming) -> str:
     return "+".join(genes)
 
 
-def build_pair(vae, field, data, fold: dict, config: dict,
+def build_pair(model, data, fold: dict, config: dict,
                rng: np.random.Generator, max_cells: int | None = None,
                genes: np.ndarray | None = None) -> tuple[ad.AnnData, ad.AnnData]:
     """Predicted and real AnnData over the fold's test conditions plus control.
@@ -45,7 +45,8 @@ def build_pair(vae, field, data, fold: dict, config: dict,
     sampling noise - an unmatched count would show up as a distribution
     difference that has nothing to do with the model.
     """
-    n_steps = config["train"]["n_integration_steps"]
+    # No n_integration_steps: the field is linear in Phi, so the flow map is one
+    # matrix exponential and there is no integrator anywhere in this model.
     device = config["train"]["device"]
     control_cells = data.cells(data.control_condition)
     if max_cells:
@@ -71,8 +72,8 @@ def build_pair(vae, field, data, fold: dict, config: dict,
         n = real.shape[0]
         pick = rng.choice(control_cells.shape[0], size=n,
                           replace=control_cells.shape[0] < n)
-        predicted = predict_cells(vae, field, control_cells[pick], condition,
-                                  data.pert_index, n_steps, device, data.naming)
+        predicted = predict_cells(model, control_cells[pick], condition,
+                                  data.pert_index, device, data.naming)
         label = to_celleval_label(condition, data.naming)
         pred_blocks.append(predicted)
         pred_labels += [label] * n
@@ -94,12 +95,12 @@ def build_pair(vae, field, data, fold: dict, config: dict,
     return assemble(pred_blocks, pred_labels), assemble(real_blocks, real_labels)
 
 
-def export(vae, field, data, fold: dict, config: dict, out_dir: str,
+def export(model, data, fold: dict, config: dict, out_dir: str,
            rng: np.random.Generator, max_cells: int | None = None,
            genes: np.ndarray | None = None) -> dict[str, str]:
     import os
     os.makedirs(out_dir, exist_ok=True)
-    adata_pred, adata_real = build_pair(vae, field, data, fold, config, rng,
+    adata_pred, adata_real = build_pair(model, data, fold, config, rng,
                                         max_cells, genes)
     paths = {"pred": os.path.join(out_dir, "pred.h5ad"),
              "real": os.path.join(out_dir, "real.h5ad")}

@@ -33,8 +33,7 @@ from src.data import splits
 from src.data.conventions import ConditionNaming
 from src.data.dataset import PerturbationData
 from src.eval.celleval import CONTROL_LABEL, PERT_COL, export
-from src.models.backbones import build_backbone
-from src.models.flow import PKFMField
+from src.eval.diagnostics import load_run
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CELLEVAL_WINDOWS = os.path.join(REPO_ROOT, ".env-celleval")
@@ -215,11 +214,6 @@ def main() -> None:
                              "is why this takes longer than the training does. "
                              "pdex already builds ONE shared matrix for workers "
                              "to read, so raising this does not raise /dev/shm.")
-    parser.add_argument("--alpha", default=None, choices=("none", "mean", "cell"),
-                        help="post-hoc magnitude correction (eval.magnitude_alpha), "
-                             "fitted on this run's TRAINING conditions. Required for "
-                             "any checkpoint written before the option existed: its "
-                             "config carries no such key and would score uncorrected.")
     parser.add_argument("--gate", default=None,
                         choices=["soft", "hard", "sample"],
                         help="override model.hurdle_gate for this scoring only. "
@@ -242,7 +236,7 @@ def main() -> None:
     # predictions this export holds, so an export made under one must never
     # overwrite an export made under another - that would destroy the uncorrected
     # baseline the corrected run is being compared against, silently.
-    out_dir = os.path.join(args.run_dir, celleval_dir(args.gate, args.alpha))
+    out_dir = os.path.join(args.run_dir, celleval_dir(args.gate, None))
     interpreter = None
     if not args.export_only:
         # Resolved and probed BEFORE the export, so a broken environment costs
@@ -263,69 +257,31 @@ def main() -> None:
         if not os.path.exists(checkpoint_path):
             raise SystemExit(f"no checkpoint at {checkpoint_path}")
 
-        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        config = checkpoint["config"]
+        # ONE loader, shared with paper_table.py and every diagnostic. scPKFM built its
+        # own model here and had to rebuild the anchor table and the magnitude
+        # correction alongside it - and for a long while did neither, so five of the
+        # paper's eight columns were scored from a different prediction than the sixth
+        # without anything saying so. There is nothing left to rebuild: Phi and the
+        # additive weights are buffers and travel in the checkpoint.
+        device = "cpu" if not torch.cuda.is_available() else None
         if args.gate:
-            config["model"]["hurdle_gate"] = args.gate
             print(f"hurdle gate overridden: {args.gate}")
-        if args.alpha:
-            config["eval"]["magnitude_alpha"] = args.alpha
-            print(f"magnitude alpha overridden: {args.alpha}")
-        device = config["train"]["device"]
-        if device == "cuda" and not torch.cuda.is_available():
-            device = config["train"]["device"] = config["eval"]["device"] = "cpu"
-
-        print(f"loading data ({config['data']['cache_h5ad']}) ...")
-        data = PerturbationData(config["data"]["cache_h5ad"],
-                                naming=ConditionNaming.from_config(config))
-        method = config["split"]["method"]
-        fold = splits.folds(config, method)[config["split"]["fold"]]
-
-        vae = build_backbone(config, data.n_genes, data.gene_names).to(device)
-        vae.load_state_dict(checkpoint["vae"])
-        field = PKFMField(config, data.n_perturbations, vae.latent_dim,
-                          data.perturbations).to(device)
-        field.load_state_dict(checkpoint["field"])
-        # The anchor table and the magnitude correction are not in the checkpoint -
-        # both are functions of the training conditions and the condition means, and
-        # predict_cells reads them off the field. This script builds its own field
-        # rather than going through diagnostics.load_run, so without this it would
-        # score an anchored or alpha-corrected run as if it were neither, and five
-        # of the paper's columns would silently disagree with the others.
-        from src.eval import baselines as _baselines
-        from src.eval import predict as _predict
-        # Built from the cells already loaded here rather than through
-        # diagnostics._dataset, which would open the cache a second time - 2.2 GB
-        # on Norman for a table of means.
-        _labels = np.empty(data.x.shape[0], dtype=object)
-        for _condition, _rows in data.rows.items():
-            _labels[_rows] = _condition
-        _stats = _baselines.ConditionMeans(data.x, _labels, data.naming)
-        _train_conditions = _baselines.training_conditions(_stats, fold, method)
-        field.anchor_table = _baselines.anchor_deltas(
-            config["model"].get("anchor", "none"), _stats, _train_conditions,
-            list(_stats.mean), alpha=config["eval"]["ridge_alpha"])
-        vae.eval()
-        field.eval()
-        _alpha_mode = config["eval"].get("magnitude_alpha", "none")
-        field.magnitude_alpha = None
-        if _alpha_mode != "none":
-            field.magnitude_alpha = (_alpha_mode, _predict.fit_alpha(
-                vae, field, data, _stats, _train_conditions, config,
-                np.random.default_rng(config["eval"]["seed"]),
-                anchor=field.anchor_table))
-            print(f"magnitude alpha ({_alpha_mode}): "
-                  f"{field.magnitude_alpha[1]:.4f}")
+        print("loading the run ...")
+        config, data, _stats, fold, model = load_run(
+            args.run_dir, device or torch.load(
+                checkpoint_path, map_location="cpu",
+                weights_only=False)["config"]["train"]["device"],
+            gate=args.gate)
 
         genes = None
         if args.infer_top_gene:
-            from src.eval.diagnostics import scdfm_eval_genes
+            from src.eval.conditions import scdfm_eval_genes
             genes = scdfm_eval_genes(data, fold, args.infer_top_gene)
             print(f"scoring on {len(genes):,} scanpy-HVG genes of the test subset")
 
         rng = np.random.default_rng(config["eval"]["seed"])
         print("transporting control cells for every test condition ...")
-        paths = export(vae, field, data, fold, config, out_dir, rng,
+        paths = export(model, data, fold, config, out_dir, rng,
                        args.max_cells, genes)
         print(f"  wrote {paths['pred']} and {paths['real']}  "
               f"({paths['n_cells']} cells, {paths['n_conditions']} conditions, "

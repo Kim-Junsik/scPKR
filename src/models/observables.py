@@ -56,6 +56,8 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+import torch.nn as nn
+
 from ..data.kegg import build_prior
 
 POOLS = ("mean", "sum", "l2")
@@ -118,8 +120,15 @@ def _select_anchors(kind: str, n_wanted: int, targets: list[str],
     return np.asarray(chosen, dtype=np.int64)
 
 
-class Observables:
-    """Phi as one [K, G] matrix plus a fixed standardisation. Nothing is learned.
+class Observables(nn.Module):
+    """Phi as one [K, G] matrix plus a fixed standardisation. Nothing is LEARNED.
+
+    An nn.Module with BUFFERS rather than a plain object, so the matrix and the
+    standardisation travel in the checkpoint. A scored run then uses the coordinates it
+    was trained in rather than ones rebuilt from the data and hoped to be identical -
+    scPKFM's own comment on its anchor table says why: a stale table shipped alongside
+    stale weights reads as a bad result instead of a bad load. Rebuilding from data
+    gives the right shapes; load_state_dict then makes the saved tensors authoritative.
 
     `train_rows` are the cells the model is allowed to see. They set the variance
     ranking for the anchor block and the standardisation, and nothing else reads
@@ -128,6 +137,7 @@ class Observables:
 
     def __init__(self, config: dict, gene_names: np.ndarray, x: np.ndarray,
                  train_rows: np.ndarray, targets: list[str]):
+        super().__init__()
         model_cfg = config["model"]
         kind = model_cfg["observables"]
         if kind not in KINDS:
@@ -195,9 +205,9 @@ class Observables:
         # aligned with `names` and with the readout scaffold.
         self._std = np.maximum(raw.std(axis=0), 1e-6).astype(np.float32)
 
-        self.matrix = torch.from_numpy(matrix)
-        self.mean = torch.from_numpy(self._mean)
-        self.std = torch.from_numpy(self._std)
+        self.register_buffer("matrix", torch.from_numpy(matrix), persistent=True)
+        self.register_buffer("mean", torch.from_numpy(self._mean), persistent=True)
+        self.register_buffer("std", torch.from_numpy(self._std), persistent=True)
 
     # ------------------------------------------------------------------ interface
 
@@ -220,13 +230,7 @@ class Observables:
         """
         return slice(self.n_pathways, self.dim)
 
-    def to(self, device) -> "Observables":
-        self.matrix = self.matrix.to(device)
-        self.mean = self.mean.to(device)
-        self.std = self.std.to(device)
-        return self
-
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """[B, G] -> [B, K]. One matmul; no parameters, no gradient of its own."""
         return (x @ self.matrix.T - self.mean) / self.std
 
