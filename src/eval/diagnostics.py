@@ -97,9 +97,20 @@ def build_model(config: dict, data, stats, fold: dict, method: str, device: str)
     rows = training_rows(data, train_conditions)
     observables = Observables(config, data.gene_names, data.x, rows, data.perturbations)
     weights = ridge_weights(config, data, stats, train_conditions)
-    detection = torch.from_numpy((data.x[rows] > 0).mean(axis=0).astype(np.float32))
+    cells = data.x[rows]
+    detected = cells > 0
+    counts = detected.sum(axis=0)
+    detection = torch.from_numpy((counts / max(len(rows), 1)).astype(np.float32))
+    # Per-gene spread of the NON-ZERO values, which is what the magnitude models: a
+    # gene detected in 5 % of cells has magnitudes around 20 times its overall mean, so
+    # a unit spread would be neither the right size nor comparable between two genes.
+    total = np.where(detected, cells, 0.0).sum(axis=0)
+    conditional_mean = total / np.maximum(counts, 1)
+    variance = (np.where(detected, (cells - conditional_mean) ** 2, 0.0).sum(axis=0)
+                / np.maximum(counts - 1, 1))
+    dispersion = torch.from_numpy(np.sqrt(np.maximum(variance, 1e-6)).astype(np.float32))
     model = PathwayKoopmanResidual(config, observables, data.n_perturbations,
-                                  weights, detection).to(device)
+                                  weights, detection, dispersion).to(device)
     return model, train_conditions, rows
 
 

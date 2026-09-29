@@ -173,6 +173,21 @@ class MeanPreservingHurdleHead(nn.Module):
     6.64 -> 1.46. DS is a population statistic and is the axis scPKFM trailed on. All
     of that is about the zero fraction and the spread, neither of which is the mean.
 
+    WHAT THIS COSTS, MEASURED AND UNRESOLVED. Pinning the magnitude to mu / q buys the
+    premise and sells population fidelity: there is no free magnitude left to fit the
+    shape with. On combosciplex a 10-epoch run scores edist_rel 6.6 against a control
+    level of 1.0, and the ADDITIVE prediction through the same head scores 7.0 - so it is
+    the head, not the residual. scPKFM's HurdleHead, whose magnitude was free, reached
+    1.46.
+
+    That is a real trade and it is not settled here. It favours everything mean-based -
+    L2, MSE, MAE, and the premise itself - and it costs DS, which is a population
+    statistic. Two routes exist and both need measuring on the validation folds rather
+    than argued: give the magnitude a mean-NEUTRAL per-gene correction so the mean
+    survives while the shape is fitted, or accept the trade and report it. Do not fix it
+    by unpinning the magnitude, which would return to a head that can move the mean and
+    take the premise with it.
+
     Five parameters per gene: a_g, b_g for the gate, log_scale_g for the dispersion,
     and nothing for the magnitude. b_g is initialised so q starts near the gene's own
     detection rate, which the caller passes as `detection`; a_g starts at zero, so the
@@ -182,7 +197,8 @@ class MeanPreservingHurdleHead(nn.Module):
 
     def __init__(self, n_genes: int, bce_weight: float = 1.0,
                  gate_mode: str = "sample", magnitude_mode: str = "gaussian",
-                 detection: torch.Tensor | None = None, q_floor: float = 1e-2):
+                 detection: torch.Tensor | None = None,
+                 dispersion: torch.Tensor | None = None, q_floor: float = 1e-2):
         super().__init__()
         self.bce_weight = bce_weight
         self.gate_mode = gate_mode
@@ -196,7 +212,16 @@ class MeanPreservingHurdleHead(nn.Module):
                 else detection.clamp(q_floor, 1.0 - 1e-4))
         self.intercept = nn.Parameter(torch.log(rate / (1.0 - rate)))
         if magnitude_mode == "gaussian":
-            self.log_scale = nn.Parameter(torch.zeros(n_genes))
+            # FROM THE DATA, like the intercept. At zero this is a standard deviation of
+            # 1.0 for every gene, which is arbitrary and expensive: the magnitude is
+            # mu / q, so a gene detected in 5 % of cells has values around 20 mu, and a
+            # spread of 1.0 around that is neither the right size nor the same size for
+            # two genes. Measured with log_scale at zero, the sampled gate gave
+            # edist_rel 9.2 against a control level of 1.0 - and the additive prediction
+            # scored 9.5 through the same head, so it was the head and not the residual.
+            self.log_scale = nn.Parameter(
+                torch.zeros(n_genes) if dispersion is None
+                else torch.log(dispersion.clamp(min=1e-3)))
 
     def forward(self, mean: torch.Tensor) -> dict[str, torch.Tensor]:
         """`mean` is the predicted mean expression, [B, G], in log1p space.
@@ -282,7 +307,8 @@ class MeanPreservingHurdleHead(nn.Module):
 
 
 def build_head(config: dict, n_genes: int, width: int | None = None,
-               detection: torch.Tensor | None = None) -> nn.Module:
+               detection: torch.Tensor | None = None,
+               dispersion: torch.Tensor | None = None) -> nn.Module:
     """`hurdle_link=affine` is this repository's head; `width` is for HurdleHead only.
 
     HurdleHead reads a hidden vector and invents the mean, which is what a decoder
@@ -299,7 +325,8 @@ def build_head(config: dict, n_genes: int, width: int | None = None,
     if link == "affine":
         return MeanPreservingHurdleHead(n_genes, model_cfg["hurdle_bce_weight"],
                                         model_cfg["hurdle_gate"],
-                                        model_cfg["hurdle_magnitude"], detection)
+                                        model_cfg["hurdle_magnitude"], detection,
+                                        dispersion)
     if link == "hidden":
         if width is None:
             raise ValueError("hurdle_link=hidden needs a hidden width")
