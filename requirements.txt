@@ -1,0 +1,48 @@
+# scPKFM - the training and evaluation environment.
+#
+# Pinned exactly. Every number in README.md was measured under these versions,
+# and two of them are load-bearing rather than incidental:
+#
+#   scanpy    HVG_CRITERION=scanpy calls sc.pp.highly_variable_genes with its
+#             seurat default. The binning and the ddof are what make the gene
+#             space match the reference pipeline's; a different minor version can
+#             pick a different 5,000 genes, and the plain variance/mean criterion
+#             already moves Control-vs-double L2 by 1.6x. Pin it or the cache is
+#             not comparable to the one the table was built on.
+#   POT       exact OT coupling in src/train/coupling.py (`import ot`). The
+#             coupling decides which control cell is transported to which target,
+#             so a solver change is a change to the training signal.
+#
+# torch is listed WITHOUT an index directive on purpose: the CUDA build is a
+# deployment choice, not a dependency, and an --extra-index-url in here would
+# silently apply to every other package too. The Dockerfile installs it first
+# from --build-arg TORCH_INDEX_URL (cu118 by default, matching the measured
+# environment), so this line is already satisfied when pip reads the file.
+# Outside Docker, do the same in two steps:
+#
+#     pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+#     pip install -r requirements.txt
+#
+# cell-eval is deliberately absent. Its dependency set conflicts with this one -
+# that conflict is the entire reason scripts/run_celleval.py shells out to a
+# second interpreter. See requirements-celleval.txt.
+
+torch==2.7.1
+
+numpy==2.1.2
+scipy==1.16.0
+pandas==2.3.0
+scikit-learn==1.7.0
+
+# single-cell IO. h5py is used directly by src/data/io.py for the chunked read,
+# not only through anndata.
+anndata==0.13.2
+scanpy==1.12.3
+h5py==3.16.0
+
+# optimal transport - the minibatch coupling
+POT==0.9.7.post1
+
+# tests/ - test_structure.py checks the non-additivity property the additive
+# composition rests on, so this belongs in the runtime image, not in a dev extra.
+pytest==9.1.1

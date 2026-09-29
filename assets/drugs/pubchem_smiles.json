@@ -1,0 +1,223 @@
+[
+  {
+    "query": "Alvespimycin",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 5288674,
+        "MolecularFormula": "C32H48N4O8",
+        "SMILES": "C[C@H]1C[C@@H]([C@@H]([C@H](/C=C(/[C@@H]([C@H](/C=C\\C=C(\\C(=O)NC2=CC(=O)C(=C(C1)C2=O)NCCN(C)C)/C)OC)OC(=O)N)\\C)C)O)OC",
+        "ConnectivitySMILES": "CC1CC(C(C(C=C(C(C(C=CC=C(C(=O)NC2=CC(=O)C(=C(C1)C2=O)NCCN(C)C)C)OC)OC(=O)N)C)C)O)OC",
+        "Title": "Alvespimycin"
+      }
+    ]
+  },
+  {
+    "query": "Carmofur",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 2577,
+        "MolecularFormula": "C11H16FN3O3",
+        "SMILES": "CCCCCCNC(=O)N1C=C(C(=O)NC1=O)F",
+        "ConnectivitySMILES": "CCCCCCNC(=O)N1C=C(C(=O)NC1=O)F",
+        "Title": "Carmofur"
+      }
+    ]
+  },
+  {
+    "query": "Cediranib",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 9933475,
+        "MolecularFormula": "C25H27FN4O3",
+        "SMILES": "CC1=CC2=C(N1)C=CC(=C2F)OC3=NC=NC4=CC(=C(C=C43)OC)OCCCN5CCCC5",
+        "ConnectivitySMILES": "CC1=CC2=C(N1)C=CC(=C2F)OC3=NC=NC4=CC(=C(C=C43)OC)OCCCN5CCCC5",
+        "Title": "Cediranib"
+      }
+    ]
+  },
+  {
+    "query": "Crizotinib",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 11626560,
+        "MolecularFormula": "C21H22Cl2FN5O",
+        "SMILES": "C[C@H](C1=C(C=CC(=C1Cl)F)Cl)OC2=C(N=CC(=C2)C3=CN(N=C3)C4CCNCC4)N",
+        "ConnectivitySMILES": "CC(C1=C(C=CC(=C1Cl)F)Cl)OC2=C(N=CC(=C2)C3=CN(N=C3)C4CCNCC4)N",
+        "Title": "Crizotinib"
+      }
+    ]
+  },
+  {
+    "query": "Curcumin",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 969516,
+        "MolecularFormula": "C21H20O6",
+        "SMILES": "COC1=C(C=CC(=C1)/C=C/C(=O)CC(=O)/C=C/C2=CC(=C(C=C2)O)OC)O",
+        "ConnectivitySMILES": "COC1=C(C=CC(=C1)C=CC(=O)CC(=O)C=CC2=CC(=C(C=C2)O)OC)O",
+        "Title": "Curcumin"
+      }
+    ]
+  },
+  {
+    "query": "Dacinostat",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 6445533,
+        "MolecularFormula": "C22H25N3O3",
+        "SMILES": "C1=CC=C2C(=C1)C(=CN2)CCN(CCO)CC3=CC=C(C=C3)/C=C/C(=O)NO",
+        "ConnectivitySMILES": "C1=CC=C2C(=C1)C(=CN2)CCN(CCO)CC3=CC=C(C=C3)C=CC(=O)NO",
+        "Title": "Dacinostat"
+      }
+    ]
+  },
+  {
+    "query": "Danusertib",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 11442891,
+        "MolecularFormula": "C26H30N6O3",
+        "SMILES": "CN1CCN(CC1)C2=CC=C(C=C2)C(=O)NC3=NNC4=C3CN(C4)C(=O)[C@@H](C5=CC=CC=C5)OC",
+        "ConnectivitySMILES": "CN1CCN(CC1)C2=CC=C(C=C2)C(=O)NC3=NNC4=C3CN(C4)C(=O)C(C5=CC=CC=C5)OC",
+        "Title": "Danusertib"
+      }
+    ]
+  },
+  {
+    "query": "Dasatinib",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 3062316,
+        "MolecularFormula": "C22H26ClN7O2S",
+        "SMILES": "CC1=C(C(=CC=C1)Cl)NC(=O)C2=CN=C(S2)NC3=CC(=NC(=N3)C)N4CCN(CC4)CCO",
+        "ConnectivitySMILES": "CC1=C(C(=CC=C1)Cl)NC(=O)C2=CN=C(S2)NC3=CC(=NC(=N3)C)N4CCN(CC4)CCO",
+        "Title": "Dasatinib"
+      }
+    ]
+  },
+  {
+    "query": "Givinostat",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 9804992,
+        "MolecularFormula": "C24H27N3O4",
+        "SMILES": "CCN(CC)CC1=CC2=C(C=C1)C=C(C=C2)COC(=O)NC3=CC=C(C=C3)C(=O)NO",
+        "ConnectivitySMILES": "CCN(CC)CC1=CC2=C(C=C1)C=C(C=C2)COC(=O)NC3=CC=C(C=C3)C(=O)NO",
+        "Title": "Givinostat"
+      }
+    ]
+  },
+  {
+    "query": "PCI-34051",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 24753719,
+        "MolecularFormula": "C17H16N2O3",
+        "SMILES": "COC1=CC=C(C=C1)CN2C=CC3=C2C=C(C=C3)C(=O)NO",
+        "ConnectivitySMILES": "COC1=CC=C(C=C1)CN2C=CC3=C2C=C(C=C3)C(=O)NO",
+        "Title": "Pci-34051"
+      }
+    ]
+  },
+  {
+    "query": "Panobinostat",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 6918837,
+        "MolecularFormula": "C21H23N3O2",
+        "SMILES": "CC1=C(C2=CC=CC=C2N1)CCNCC3=CC=C(C=C3)/C=C/C(=O)NO",
+        "ConnectivitySMILES": "CC1=C(C2=CC=CC=C2N1)CCNCC3=CC=C(C=C3)C=CC(=O)NO",
+        "Title": "Panobinostat"
+      }
+    ]
+  },
+  {
+    "query": "Pirarubicin",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 11296583,
+        "MolecularFormula": "C32H37NO12",
+        "SMILES": "C[C@H]1[C@H]([C@H](C[C@@H](O1)O[C@H]2C[C@@](CC3=C2C(=C4C(=C3O)C(=O)C5=C(C4=O)C(=CC=C5)OC)O)(C(=O)CO)O)N)O[C@@H]6CCCCO6",
+        "ConnectivitySMILES": "CC1C(C(CC(O1)OC2CC(CC3=C2C(=C4C(=C3O)C(=O)C5=C(C4=O)C(=CC=C5)OC)O)(C(=O)CO)O)N)OC6CCCCO6",
+        "Title": "Pirarubicin"
+      }
+    ]
+  },
+  {
+    "query": "SRT1720",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 25232708,
+        "MolecularFormula": "C25H24ClN7OS",
+        "SMILES": "C1CN(CCN1)CC2=CSC3=NC(=CN23)C4=CC=CC=C4NC(=O)C5=NC6=CC=CC=C6N=C5.Cl",
+        "ConnectivitySMILES": "C1CN(CCN1)CC2=CSC3=NC(=CN23)C4=CC=CC=C4NC(=O)C5=NC6=CC=CC=C6N=C5.Cl",
+        "Title": "Srt1720"
+      }
+    ]
+  },
+  {
+    "query": "SRT2104",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 25108829,
+        "MolecularFormula": "C26H24N6O2S2",
+        "SMILES": "CC1=C(SC(=N1)C2=CN=CC=C2)C(=O)NC3=CC=CC=C3C4=CN5C(=CSC5=N4)CN6CCOCC6",
+        "ConnectivitySMILES": "CC1=C(SC(=N1)C2=CN=CC=C2)C(=O)NC3=CC=CC=C3C4=CN5C(=CSC5=N4)CN6CCOCC6",
+        "Title": "Srt-2104"
+      }
+    ]
+  },
+  {
+    "query": "SRT3025",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 46245047,
+        "MolecularFormula": "C31H31N5O2S2",
+        "SMILES": "COCCCC1=C(N=C(S1)C2=CC=CC=C2)C(=O)NC3=CC=CC=C3C4=NC5=C(S4)N=CC(=C5)CN6CCCC6",
+        "ConnectivitySMILES": "COCCCC1=C(N=C(S1)C2=CC=CC=C2)C(=O)NC3=CC=CC=C3C4=NC5=C(S4)N=CC(=C5)CN6CCCC6",
+        "Title": "5-(3-Methoxypropyl)-2-phenyl-N-(2-(6-(pyrrolidin-1-ylmethyl)thiazolo[5,4-b]pyridin-2-yl)phenyl)thiazole-4-carboxamide"
+      }
+    ]
+  },
+  {
+    "query": "Sorafenib",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 216239,
+        "MolecularFormula": "C21H16ClF3N4O3",
+        "SMILES": "CNC(=O)C1=NC=CC(=C1)OC2=CC=C(C=C2)NC(=O)NC3=CC(=C(C=C3)Cl)C(F)(F)F",
+        "ConnectivitySMILES": "CNC(=O)C1=NC=CC(=C1)OC2=CC=C(C=C2)NC(=O)NC3=CC(=C(C=C3)Cl)C(F)(F)F",
+        "Title": "Sorafenib"
+      }
+    ]
+  },
+  {
+    "query": "Tanespimycin",
+    "n_hits": 1,
+    "hits": [
+      {
+        "CID": 6505803,
+        "MolecularFormula": "C31H43N3O8",
+        "SMILES": "C[C@H]1C[C@@H]([C@@H]([C@H](/C=C(/[C@@H]([C@H](/C=C\\C=C(\\C(=O)NC2=CC(=O)C(=C(C1)C2=O)NCC=C)/C)OC)OC(=O)N)\\C)C)O)OC",
+        "ConnectivitySMILES": "CC1CC(C(C(C=C(C(C(C=CC=C(C(=O)NC2=CC(=O)C(=C(C1)C2=O)NCC=C)C)OC)OC(=O)N)C)C)O)OC",
+        "Title": "Tanespimycin"
+      }
+    ]
+  }
+]

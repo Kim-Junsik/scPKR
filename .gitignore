@@ -1,0 +1,39 @@
+# This repository is edited on Windows and run on Linux. A CRLF in a shell script
+# makes the kernel look for an interpreter called "/bin/sh\r", so line endings are
+# pinned in .gitattributes rather than left to core.autocrlf.
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Training output: checkpoints run to ~30 MB each and every experiment writes one.
+# Anchored with a leading slash: an unanchored "results/" matches at EVERY depth,
+# so it would also hide a src/results/ if one is ever added. The unanchored form
+# of the rule below silently excluded all of src/data/ from the repository.
+/results/
+
+# Datasets and the caches built from them. norman.h5ad alone is 2.1 GB, and a
+# per-fold cache is ~137 MB; the strict split makes those fold-specific, so they
+# multiply. data_prepare.py rebuilds any of them from the raw file.
+/data/
+assets/*.h5ad
+
+# The KEGG snapshot the pathway mask is built from. Free for academic use, but
+# redistributing the files is a different permission from using them, so they are
+# fetched rather than shipped:
+#     python scripts/download_kegg.py
+# manifest.json records the retrieval date, which is what keeps this reproducible
+# - KEGG has no version endpoint.
+assets/kegg/
+
+# cell-eval's interpreter. It exists because cell-eval's dependency set conflicts
+# with this project's, and it is built on first use by run.sh.
+.env-celleval/
+.env-celleval-linux/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

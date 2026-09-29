@@ -1,0 +1,9 @@
+# This repository is edited on Windows and run on Linux. A CRLF in a shell script
+# makes the kernel look for an interpreter called "/bin/sh\r", so line endings are
+# pinned rather than left to core.autocrlf.
+* text=auto eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.h5ad binary
+*.pt binary
+*.pkl binary

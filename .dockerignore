@@ -1,0 +1,36 @@
+# The build context is sent to the daemon in full before anything runs, so what
+# is excluded here is a build-time cost, not just an image-size one.
+
+# 2.1 GB for norman.h5ad alone, and it is mounted at run time.
+data/
+
+# Checkpoints run to ~30 MB each and every experiment writes one. Mounted.
+results/
+
+# The per-fold cache is ~137 MB and the strict split makes it fold-specific, so
+# they multiply. Rebuilt by data_prepare.py, mounted at run time.
+assets/
+
+# The Windows cell-eval interpreter. Copying it into a Linux image is worse than
+# useless: os.path.exists finds it, exec fails with a message naming nothing.
+# The image builds its own at /opt/celleval.
+.env-celleval/
+.env-celleval-linux/
+
+# History is not needed to train, and .git here is larger than the source.
+.git/
+.gitignore
+.gitattributes
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+Dockerfile
+.dockerignore

@@ -1,0 +1,28 @@
+# The second interpreter, and only the second interpreter.
+#
+# cell-eval's dependency set conflicts with requirements.txt - that is why this
+# project runs the scoring half in a separate environment instead of importing
+# cell_eval directly. Never install this file into the training environment.
+#
+#   Requires-Python: >=3.10,<3.13   (from the package metadata, not from a guess)
+#
+# The Dockerfile builds it at /opt/celleval and exports CELLEVAL_PYTHON, which
+# scripts/run_celleval.py reads before it looks anywhere else. On a bare host,
+# scripts/setup_celleval_linux.sh does the same thing with uv or venv.
+#
+# The version is pinned to match the Windows env that shipped with the repo. The
+# two must agree: cell-eval supplies five of the eight columns in the reported
+# table, so a version difference between hosts means those columns stop
+# comparing across runs.
+
+cell-eval==0.5.42
+
+# pdex is pinned because cell-eval does not pin it, and 0.3.0 removed the entry
+# point cell_eval/_baseline.py imports at module load:
+#
+#   ImportError: cannot import name 'parallel_differential_expression' from 'pdex'
+#
+# So an unpinned install of cell-eval==0.5.42 is broken on any host that resolves
+# pdex after the 0.3.0 release - the pin is what makes the version above mean
+# anything. 0.1.28 is the version the reported table was measured with.
+pdex==0.1.28
