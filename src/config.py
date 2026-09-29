@@ -129,332 +129,287 @@ DEFAULTS: dict[str, Any] = {
         "seed": 0,
     },
     "model": {
-        "latent_dim": 64,
-        # --- representation backbone (ablation axis: the dynamics claim should
-        #     hold on top of any of these, not just one) ---
-        # Only P-CAB/E-RCA is built here. The mlp, transformer and scvi
-        # backbones exist in the full-axis repository this was pruned from.
-        "backbone": "pcab",
-        "hidden": [1024, 512],
-        "dropout": 0.1,
-        # Decoder output head. 41.2 % of the data is exactly zero and an mse head
-        # produces exact zeros 0.000 % of the time, so this matters for the
-        # population-level metric.
-        # hurdle only: 41 % of entries are exactly zero, and a plain MSE head
-        # fixes a constant sigma, which collapses cell-to-cell variance.
-        "decoder_head": "hurdle",
-        # Rank of the gene-wise output readout (pcab.GeneWiseHurdleHead). 1 is the
-        # measured configuration: ONE shared direction in the d_value feature space
-        # for all G genes, plus a per-gene bias. Every gene therefore shares the same
-        # feature -> expression rule, and the map cannot mix genes - so it cannot
-        # express a rotation, only a per-gene gain.
+        # =====================================================================
+        #   Delta x(S, x) = sum_{a in S} w_a                      additive, closed form
+        #                 + 1[|S| >= 2] * W @ B_S @ Phi(x)        residual, learned
         #
-        # That is what the direction diagnosis points at. A per-gene diagonal
-        # correction moves L2 by 0.05-0.16 and leaves cosine unchanged, i.e. the
-        # decoder's distortion is genes MIXING, not genes scaled wrongly. And the
-        # residual sits where a rank-1 readout would leave it: the ~950 genes
-        # outside the top-50 energy block score cosine 0.65 in every run measured,
-        # against 0.90-0.94 inside it, and 0.65 holds AT THE DECODER CEILING (true
-        # latents in), so it is not a transport error.
+        #   Phi   FIXED observables: KEGG pathway activities plus anchor genes
+        #   A_a   per-perturbation Koopman operator on those observables
+        #   B_S   composition of the operators in S
+        #   W     observable -> gene readout, non-zero on KEGG edges only
         #
-        # rank > 1 gives R shared directions and per-gene mixing coefficients:
-        # R*d_value + G*R parameters, 81 K at R=16, G=5000, d_value=64, against the
-        # 5.2 M encoder. Initialised so coefficient 0 is one and the rest zero,
-        # making rank=1 the exact starting point of any larger rank. Changing this
-        # changes stage 1, so a run cannot reuse an encoder trained at another rank.
-        "head_rank": 1,
-        "hurdle_bce_weight": 1.0,
-        # How the binary detection event is realised at inference.
-        # sample is the right default for a distribution-level metric; soft is
-        # optimal for mean-only metrics. See HurdleHead.point_estimate.
-        "hurdle_gate": "sample",  # soft | hard | sample
-        # point pins the magnitude to its conditional mean (what plain MSE does);
-        # gaussian learns a dispersion so the magnitude can be drawn as well.
-        "hurdle_magnitude": "gaussian",  # point <- MSE | gaussian
-        # --- latent dynamics ---
-        # affine        u_a = s(t)*(A_a z + b_a). One 64x64 operator PER
-        #               perturbation: 4,160 parameters each.
-        # neural_field  u_a = f([z, phi(t), e_a]). One SHARED trunk, and the
-        #               perturbation enters only through a 32-dim embedding: 32
-        #               parameters each, a factor of 130 less dedicated capacity.
-        # Measured on fold 0 with everything else fixed, affine won on both
-        # backbones (mlp 0.3348 vs -0.4377, pcab 0.1965 vs -0.1346). The two arms
-        # differ in capacity AND in linear-vs-nonlinear form at once, so that
-        # attribution is not isolated - the reading that capacity mattered rests
-        # on the more expressive arm being the one that lost.
-        "generator": "affine",  # affine | neural_field | shared_basis
-        "generator_hidden": [256, 256],  # neural_field trunk only
-        # shared_basis  u_a = s(t)*(U diag(c_a) V z + P_a Q_a z + b_a). Still one
-        #               linear (Koopman) operator per perturbation, but built on m
-        #               modes every perturbation shares, with a rank-p private
-        #               part. m=0, p=r is the affine generator at rank r. See
-        #               generators.SharedBasisGenerator for the measurement behind it.
-        "shared_rank": 64,  # m; shared_basis only
-        "private_rank": 8,  # p; shared_basis only, 0 = shared modes alone
-        # How the per-perturbation fields combine.
-        # additive  v = sum_a u_a. First-order BCH, and the measured default.
-        # learned   v = sum_a u_a + rho(sum_a phi(u_a)). Learns the composition
-        #           law from the generators' OUTPUT VELOCITIES rather than
-        #           truncating BCH at a fixed order. Distinct from the interaction
-        #           term that already lost, which read perturbation embeddings -
-        #           identity - where this reads the velocities themselves, so an
-        #           unseen pair is on the same footing as a seen one.
-        #           Starts exactly additive (rho's output layer is zero).
-        "composition": "additive",  # additive | learned
+        # Two properties hold by construction and are asserted in
+        # tests/test_structure.py rather than hoped for:
+        #
+        #   A_a = 0  =>  the prediction IS the additive baseline
+        #   |S| = 1  =>  the second term is empty, so a single perturbation is the
+        #                additive baseline EXACTLY, at every point in training
+        #
+        # Both matter because the baseline is not weak. Measured on the reported
+        # metric over 5 folds (scripts/baseline_l2.py): Table 1 1.669, Table 2
+        # single 1.416 / double 2.251, Table 3 1.858 - ahead of scPKFM on all four
+        # and at or above scDFM on the first two. Training can only move down from
+        # there, and it cannot touch the single block, which is the block learned
+        # models lose 0.203 on.
+        # =====================================================================
+
+        # --- the additive component: 88 % of the signal, never learned ---
+        # ridge  w_a from a one-hot ridge over the TRAINING conditions,
+        #        baselines.fit_ridge_additive. Deterministic, so it contributes no
+        #        seed noise - and scPKFM's seed noise (0.28 L2 on combosciplex)
+        #        exceeded every effect it was trying to measure.
+        # none   the model produces the whole displacement. The control arm, and
+        #        what scPKFM was: it starts at zero and has to find 88 % of the
+        #        signal before reaching any of the residual.
+        "additive": "ridge",  # ridge | none
+        # Ridge penalty for w_a. PROVISIONAL for the same reason eval.ridge_alpha is:
+        # picking it by looking at test performance is not legitimate, so select it
+        # by inner CV over the TRAINING combinations before quoting a final line.
+        # Deliberately NOT eval.ridge_alpha - there it sizes a baseline being
+        # reported, here it sizes a component of the model, and moving one should
+        # not silently move the other.
+        "additive_alpha": 1.0,
+
+        # --- the observables: fixed, not learned ---
+        # THE KOOPMAN CLAIM. eDMD's central open problem is choosing the dictionary
+        # of observables, and the usual answers are polynomials, RBFs, or a learned
+        # encoder. KEGG is a biological answer: it comes from outside the data so it
+        # cannot overfit it, and it is fixed so there is no reconstruction loss and
+        # no autoencoder ceiling. On scPKFM's Table 3 that ceiling was 0.97 of a
+        # 2.138 total - 45 % of the error, paid before transport started, and not
+        # removable while a latent autoencoder was in the design (widening it made
+        # things worse: rank-16 readout took the single block 2.57 -> 3.94).
+        #
+        #   kegg    Phi(x) = [pool(M x) ; x_anchor]. The claim.
+        #   pca     the same dimension from a PCA of the TRAINING cells. Ablation: a
+        #           dictionary learned from the data. If it wins, biology is not
+        #           load-bearing and claim A is withdrawn.
+        #   random  random gene groups at KEGG's sparsity and size distribution.
+        #           Ablation: is it the pathways, or just K sparse projections?
+        #   genes   the top-K variance genes, no grouping. Ablation: is pooling
+        #           doing anything at all?
+        "observables": "kegg",  # kegg | pca | random | genes
+        # How a pathway's activity is pooled from its member genes. mean is the only
+        # one invariant to pathway size; sum makes a 300-gene pathway 30x the scale
+        # of a 10-gene one and the operator would have to spend capacity undoing it.
+        "observable_pool": "mean",  # mean | sum | l2
+        # Anchor coordinates appended to the pathway ones.
+        #
+        # A PERTURBATION'S OWN TARGET MUST BE OBSERVABLE. 53 of Norman's 101 targets
+        # sit in no usable KEGG pathway, and an observable space that cannot see the
+        # perturbed gene cannot represent its effect - that is not a tuning issue,
+        # it is a rank deficiency. `targets` adds every perturbation target present
+        # in the modelled gene space; `variance` tops the set up to n_anchor_genes
+        # with the highest-variance genes, which is what gives the residual somewhere
+        # to live for a drug (combosciplex perturbs drugs, which have no target gene
+        # in the data at all).
+        "anchor_genes": "targets+variance",  # targets | variance | targets+variance | none
+        "n_anchor_genes": 256,
+        # Seed for observables=random and for the random readout scaffold. Fixed so
+        # both ablations are reproducible.
+        "observable_seed": 0,
+
+        # --- the operator: A_a, acting on the observables ---
+        #   A_a = U diag(c_a) V + P_a Q_a
+        # Most of each operator comes from modes every perturbation shares, and a
+        # perturbation chooses how much of each it uses; the private part is small
+        # and rank-limited.
+        #
+        # WHY SHARED RATHER THAN PER-PERTURBATION. combosciplex has 17 drugs, 24
+        # training conditions, and 13 drugs that never appear alone. A full K x K
+        # operator is ~90,000 parameters fitted from two or three conditions. See
+        # the budget in docs/DESIGN.md section 4.
+        #
+        # m = 0 with p = r is a plain per-perturbation rank-r operator, which
+        # tests/test_structure.py asserts as the special case.
+        "shared_rank": 32,   # m, the shared modes
+        "private_rank": 4,   # p, the per-perturbation private rank. 0 = shared only
+        # INITIALISATION, and it is load-bearing. U and P_a start at ZERO, so
+        # A_a = 0 and the initial prediction is exactly the additive baseline. V and
+        # Q_a start small and RANDOM: with both factors of a product at zero the
+        # gradient vanishes for both and the operator never leaves the origin.
+        # c_a starts at ONE, so every perturbation begins using every shared mode
+        # equally and the basis first learns what the perturbations have in common.
+        # U diag(c) V is invariant to U -> kU, c -> c/k, so read A_a as a whole and
+        # never U or c_a alone.
+        "operator_init_scale": 0.02,  # the std of V and Q_a
+
+        # --- the composition law ---
+        # THE COMPOSITION CLAIM. Summing generators and integrating gives
+        #
+        #   exp(t(A+B)) - (exp(tA) + exp(tB) - I) = (t^2/2)(AB + BA) + O(t^3)
+        #
+        # so the leading correction to an additive flow map is the ANTI-commutator.
+        # It is symmetric under exchange, which is what a SIMULTANEOUS double
+        # perturbation is. The commutator [A,B] is antisymmetric and describes order
+        # dependence - Phi_a then Phi_b against the reverse - for which a
+        # simultaneous perturbation carries no signal.
+        #
+        # That is why scPKFM's Lie bracket term lost 5-0 across seven settings and
+        # two backbones, and why interaction terms in this literature generally
+        # target the wrong symmetry. Verified numerically: at operator scales
+        # 0.05 / 0.02 / 0.01 the anticommutator model's relative error is
+        # 3.5e-2 / 1.4e-2 / 7.0e-3, falling linearly in the scale as an O(t^3)
+        # remainder must, while the cosine against the commutator stays at -0.30.
+        #
+        #   anticommutator  B_S = sum_{a<b} (A_a A_b + A_b A_a). The claim.
+        #   commutator      sum_{a<b} (A_a A_b - A_b A_a). Ablation, PREDICTED to do
+        #                   nothing: it is orthogonal to the symmetric signal.
+        #   bilinear        an unconstrained symmetric second-order form, still with
+        #                   no pair-indexed parameter. Ablation: is it the
+        #                   anticommutator specifically, or any symmetric term?
+        #   sum             B_S = sum_a A_a, first order only. Ablation: is second
+        #                   order needed at all, given that the additive part is
+        #                   already handled in gene space?
+        #
+        # Every option is LINEAR IN Phi(x), so the flow map is exactly
+        # exp(B_S) and there is no integrator anywhere in this model.
+        "composition": "anticommutator",
+        # A single learned scalar on B_S, initialised at zero with U and P_a. It
+        # separates the operator's overall magnitude from its direction in the
+        # ablation tables. NOT a time embedding: scPKFM carried an s(t) MLP whose
+        # only effect was a scalar reparameterisation of a scale the operator
+        # already had, and it is gone.
+        "composition_scale": True,
+        # Hidden width for composition=bilinear only.
         "composition_hidden": 128,
-        # Project rho onto the complement of span{u_a} (flow._orthogonalise), so it
-        # can ADD directions the generators do not produce but never RESCALE the
-        # ones they do. The combination data fix u_A + u_B + rho and not how it
-        # splits, which leaves the operator of a drug seen only in combinations
-        # unidentified - 13 of combosciplex's 17 drugs, including both drugs behind
-        # the two test singles that carry 76 % of the gap to the Table 3 target.
-        # A no-op at initialisation (rho starts at zero), and it only ever removes
-        # capacity from rho, so it needs no separate warm-up.
-        "composition_orthogonal": False,
-        # Where the flow STARTS for a combination. none transports a control cell
-        # and the field must produce the whole displacement, 88 % of which is the
-        # additive part. The other two shift the control cell in GENE SPACE first,
-        # so the field only has to produce what additivity gets wrong - which is
-        # exactly what resid_R2 measures.
+
+        # --- the readout: observables back to gene space ---
+        # THE PATHWAY-MEDIATION CLAIM. W is non-zero only where KEGG says a gene
+        # belongs to a pathway (about 39,600 edges), plus the diagonal of the anchor
+        # block. So the additive component is free across all 5,000 genes, while the
+        # NON-ADDITIVE correction may only travel along the pathway scaffold.
         #
-        #   none      z0 = encode(x_ctrl)
-        #   additive  z0 = encode(x_ctrl + (m_A - m_ctrl) + (m_B - m_ctrl))
-        #   ridge     z0 = encode(x_ctrl + w_A + w_B)
+        # As biology: synergy and antagonism between perturbations happen through
+        # shared pathways. That is a claim, and dense falsifies it.
         #
-        # Both shifts are built from TRAINING conditions only: in the additive
-        # split every single is a training condition and ridge fits over the
-        # training conditions alone, so no evaluated double is read. Under the
-        # combinations split the singles of an evaluated double are held out and
-        # neither shift exists - anchoring is defined for the additive split only.
+        #   kegg    the scaffold. The claim.
+        #   dense   every (gene, observable) pair learnable, 5,000 x K. Ablation: if
+        #           dense is not better, the scaffold is load-bearing rather than a
+        #           parameter saving.
+        #   random  a random scaffold at the same sparsity. Ablation: KEGG, or just
+        #           sparsity?
+        "readout": "kegg",  # kegg | dense | random
+        # Per-gene bias on the readout. OFF: the additive component already owns
+        # every gene's constant shift, and a second one would make the two terms
+        # fight over it - which is the identifiability failure scPKFM had between
+        # its operators and rho, measured as a held-out drug's effect pointing
+        # OPPOSITE its true shift (cosine -0.26, -0.31).
+        "readout_bias": False,
+
+        # --- the output head: mean prediction -> population ---
+        # 41.2 % of entries are exactly zero, an mse head produces exact zeros
+        # 0.000 % of the time and loses 24 % of the standard deviation, and
+        # realising the binary event by SAMPLING moved energy distance 6.64 -> 1.46.
+        # DS is a population statistic and is the axis scPKFM trailed on.
         #
-        # ValueComposition's output layer starts at zero, so at step 0 the field
-        # is the zero field and the prediction IS the anchor: 0.000 resid_R2 for
-        # additive, 0.533 for ridge (fold 1). Losing to the baseline the anchor
-        # came from therefore requires getting WORSE than the starting point.
-        "anchor": "none",  # none | additive | ridge
-        # --- Koopman latent dynamics ---
-        # u_a(z,t) = s(t) * (A_a z + b_a): a linear ODE in the latent space,
-        # one 64x64 operator per perturbation. Koopman in FORM only - the
-        # encoder is trained for reconstruction and frozen, not trained to
-        # linearise the dynamics. There is no interaction term; see
-        # src/models/flow.py for the measurements behind that.
-        "time_embed_dim": 32,
-        # dense    z = Linear(K*d_v -> latent_dim). The measured configuration.
-        #          The projection mixes every pathway token, so no latent
-        #          dimension corresponds to a pathway and A_a cannot be read.
-        # pathway  z_k = <h_k, w> + b_k, one scalar per token, so latent_dim
-        #          BECOMES K and dimension k IS pathway k. A_a then is a [K, K]
-        #          pathway interaction matrix: A_a[i,j] is how much pathway j
-        #          drives pathway i under perturbation a, which is readable.
-        #          Note K includes n_free_tokens rows with no prior at all
-        #          (53 of 101 perturbation targets sit in no usable KEGG
-        #          pathway), and those dimensions are NOT pathways - report the
-        #          annotated and free blocks separately.
-        #          This buys interpretability, not accuracy: the 64-d bottleneck
-        #          was measured innocent (residual share 0.575 in latent vs
-        #          0.393 in gene space), so widening it is not expected to help.
-        "latent_readout": "dense",  # dense | pathway
-        # Low-rank factorisation of the Koopman operator, A_a = U_a V_a.
-        # None keeps the full [latent_dim, latent_dim] operator. It exists for
-        # latent_readout=pathway, where a full operator is K^2 ~ 74,000 per
-        # perturbation (7.5 M over 101) against 4,160 at latent_dim=64.
-        # rank 16 brings that back to roughly the dense-readout cost.
-        "generator_rank": None,
-        # Perturbation similarity graph coupling the affine operators; see
-        # src/models/similarity.py. null = no graph (every operator isolated).
-        # combosciplex: assets/drugs/tanimoto_ecfp4_2048.csv (drug structure).
-        "operator_graph": None,
-        # Edges only above it: w = (s - threshold) / (1 - threshold). 0.25 is above
-        # the 95th percentile of all drug pairs and was fixed before any run.
-        "operator_graph_threshold": 0.25,
-        # penalty: the loss pulls neighbouring operators together (train.
-        #          operator_graph_weight); the field is unchanged.
-        # mix:     each operator is the weighted mean of its own and its neighbours'.
-        "operator_graph_mode": "penalty",
-        # --- P-CAB mask (stage 3) ---
-        "n_pathway_tokens": None,  # None = however many KEGG pathways survive
-        "n_free_tokens": 101,
-        "d_key": 64,
-        "d_value": 64,
-        "mask_combine": "gate",  # gate (multiplicative) | logit_bias (control)
-        "mask_mode": "hybrid",  # hybrid | prior_only | residual_only
-        "mask_activation": "tanh",  # tanh (signed) | sigmoid (unsigned control)
-        "mask_alpha": 1.0,
-        "mask_share_enc_dec": True,
-        "mask_l1": 1e-5,
-        "mask_self_loop": True,
+        # The head here is SIMPLER than scPKFM's. There it read a [B, G, d_v] tensor
+        # out of a decoder; here there is no decoder, so it reads the predicted mean
+        # expression per gene and turns that scalar into a distribution:
+        #
+        #   gate_logit_g = a_g * xhat_g + b_g
+        #   magnitude_g  = softplus(c_g * xhat_g + d_g)
+        #   log_scale_g  = e_g
+        #
+        # Five parameters per gene, ~25 K total, and `affine` is the only link
+        # implemented. scPKFM's head_rank ablation does not transfer: rank 16 was
+        # harmful there because its DECODER was overfitting, and there is no decoder
+        # here.
+        "decoder_head": "hurdle",
+        "hurdle_link": "affine",
+        "hurdle_bce_weight": 1.0,
+        # sample is right for a distribution-level metric; soft is the conditional
+        # expectation and is what every reported L2 table was scored with.
+        "hurdle_gate": "sample",  # soft | hard | sample
+        "hurdle_magnitude": "gaussian",  # point <- MSE | gaussian
     },
     "train": {
-        "stage1_epochs": 30,
-        "stage2_epochs": 60,
+        # ONE STAGE. There is no autoencoder to pretrain and no latent to
+        # standardise, which is what scPKFM's two stages were for. Its stage 1 also
+        # had to be frozen for stage 2 because unfreezing gave a trivial optimum -
+        # collapse the latent and every field scores perfectly (measured:
+        # ||z1 - z0|| fell to 0.019 while ||z0|| stayed near 8). Fixed observables
+        # remove that failure mode along with the stage.
+        "epochs": 400,
         "batch_size": 256,
-        # 0 = a full pass over the data. Set it low for smoke runs so a
-        # configuration can be checked end-to-end in seconds.
+        # 0 = a full pass. Set it low for smoke runs so a configuration can be
+        # checked end to end in seconds.
         "max_steps_per_epoch": 0,
         "lr": 1e-3,
-        "weight_decay": 1e-5,
-        # Stage 1's learning rate, kept separate from stage 2's. One `lr` for
-        # both made the two stages impossible to vary independently, and the
-        # setting that scored best on fold 1 needs exactly that: stage 1 at 1e-3
-        # (30 epochs is too few to converge at half the rate) and stage 2 at
-        # 5e-4 (there is no schedule, so a large step keeps bouncing at the end).
-        # That run reached it by accident - it inherited an encoder trained at
-        # 1e-3 through init_vae_from - and reproducing it on another fold was
-        # not expressible until this existed.
-        # None follows train.lr, which is the old behaviour.
-        # Cosine decay for stage 2's learning rate, from train.lr down to
-        # lr_min over stage2_epochs. There was no schedule at all: a fixed rate
-        # for every epoch, and fm kept oscillating by +-0.005 at the end while
-        # the mean moved 0.0005 per epoch - the signature of a step too large to
-        # settle. Halving the rate outright bought 0.023 in L2, which is the only
-        # thing any axis has bought, and a schedule keeps the early speed that a
-        # halved constant rate gives up.
-        # False keeps the old behaviour exactly.
-        "lr_cosine": False,
+        "lr_cosine": True,
         "lr_min": 1e-6,
-        "stage1_lr": None,
-        "kl_weight": 1e-3,
-        # Whether stage 2 also trains the VAE. Named for the whole VAE, not just
-        # the encoder: the decoder is frozen with it, and stage 2 runs the VAE in
-        # eval mode so dropout is off and the latent is mu rather than a sample.
-        #
-        # Measured, against the handoff spec's recommendation to fine-tune:
-        # letting the encoder move during stage 2 shrinks the latent (||z0|| 8 ->
-        # 2.68) and therefore shrinks the flow-matching TARGET itself. fm fell to
-        # 0.0019 not because the field fitted well but because z1 - z0 had been
-        # made small, and transport under-predicted the true delta by 28 %.
-        # Freezing gives fm 1.01 and resid_R2 -0.0003 vs -0.7867, i.e. the
-        # additive structure is finally reproduced exactly as it should be.
-        # The spec's reasoning is not wrong - a latent optimal for reconstruction
-        # need not be one where generators compose well - but allowing the VAE to
-        # move opens an easier path than improving that geometry: shrink the
-        # latent, and the target shrinks with it. The stage-2 reconstruction term
-        # below mitigates the collapse without preventing it, because the scale
-        # can fall 3x while reconstruction stays fine. Freezing closes the path.
-        # To have both later, pin the latent scale structurally (running-stat
-        # normalisation inside encode_z) and fine-tuning becomes safe again.
-        # Reuse a finished run's encoder and skip stage 1 entirely. Give it a
-        # run directory or a checkpoint.pt path; None trains stage 1 as usual.
-        #
-        # Legitimate because stage 2 FREEZES the encoder: the same weights would
-        # be produced again, and reusing them makes a field experiment differ from
-        # its reference in the field alone. The latent standardisation travels
-        # with the checkpoint (latent_mean / latent_std are buffers), so it is not
-        # refitted either - refitting would resample 8,192 cells and move the
-        # coordinate system by a hair for no reason.
-        #
-        # Stage 2 reseeds regardless of whether stage 1 ran, so a resumed run and
-        # a fresh one draw the same minibatches from step one. Runs made before
-        # that reseed existed will not reproduce bit-for-bit.
-        "init_vae_from": None,
-        "finetune_vae_in_stage2": False,
-        # Weight on the reconstruction term kept alive during stage 2. Without it
-        # the encoder collapses the latent, which is the global optimum of flow
-        # matching on its own.
-        "stage2_recon_weight": 1.0,
-        "single_warmup_epochs": 10,  # singles only before combinations join
-        # --- composition residual, the term that puts D into the loss ---
-        # Measured on a finished run: ||int(u_a+u_b) - (int u_a + int u_b)|| is
-        # 0.9945 of the sum itself, while the DATA is only 12% non-additive
-        # (||d_AB|| / ||d_A + d_B|| = 0.879). The model invents eight times the
-        # non-additivity it should, and nothing in the loss refers to that
-        # quantity, so nothing stops it. This term supervises exactly it.
-        #
-        # 0 disables. The latent residual it matches is preserved by the encoder
-        # (its share of the signal is 0.575 in latent vs 0.393 in gene space), so
-        # supervising in latent space is not throwing information away.
-        # Distribution-level term: MMD between the one-step endpoint estimate and
-        # the coupled targets, over the whole minibatch. scDFM trains with this
-        # (gamma=0.5, on gene space) and this model did not - every other term
-        # here constrains a MEAN, so nothing asked the predicted population to
-        # have the right shape. The weight does NOT transfer from theirs: the
-        # kernel runs on the 64-d latent here, not on genes.
+        "weight_decay": 1e-5,
+        "grad_clip": 1.0,
+
+        # --- WHAT IS TRAINED ON: TRAINING COMBINATIONS ONLY ---
+        # A single perturbation's prediction is the additive component, which is
+        # closed form and has nothing to learn, so single conditions enter only
+        # through the ridge fit. This is not a limitation to work around - it is
+        # exactly why the single block cannot be damaged, and learned models lose
+        # 0.203 to ridge on that block (scDFM 1.619 and scPKFM 1.754 against ridge's
+        # 1.416, over 5 folds). Both published models have the same problem, so it
+        # is the setting and not one architecture.
+
+        # --- flow matching in observable space ---
+        # The field is v(p, t) = B_S p: linear AND autonomous. Flow matching is
+        # unchanged - same interpolant, same coupling - but the same operator has to
+        # work at every t, which is what makes this an ODE rather than an arbitrary
+        # field. The endpoint is then available in closed form and there is no
+        # integrator: exp(B_S) p0, one matrix exponential per condition.
+        "fm_weight": 1.0,
+        # exp(B_S) p0 against p1, over the WHOLE BATCH rather than one mean point.
+        # scPKFM could only afford the mean point because RK4 cost n_steps * 4 field
+        # evaluations per cell, and its own plan recorded the batch version as the
+        # one untried item with a measured bound (0.20-0.26). Here it is one
+        # matrix_exp, so the bound is reachable at no extra cost.
+        "endpoint_weight": 3.0,
+        # The same endpoint after the readout and the head, in GENE space, against
+        # the condition's mean over the reported genes. This term IS the reported
+        # metric, so it is the one loss that cannot be mismatched with what is
+        # scored. scPKFM's endpoint loss lived in the latent space and the mismatch
+        # was measured: the conditions it supervised most directly came out worst
+        # (train singles displacement ratio 0.646 against test doubles' 1.039).
+        "gene_endpoint_weight": 1.0,
+        # Multi-scale MMD between the predicted and the real population. OFF.
+        # scPKFM ran it at weight 10 and measured the estimate at NOISE LEVEL
+        # (negative values). It is listed because DS is a population statistic and
+        # the axis that was trailed on - but it has to earn its weight on the
+        # validation folds rather than be assumed into the default.
         "mmd_weight": 0.0,
-        "resid_weight": 0.0,
-        # --- endpoint matching, the FIRST-order half of the same idea ---
-        # ||Phi_a(z_ctrl) - z_a||^2 over training conditions, singles included.
-        # Measured without it (diagnose_transport.py on pcab_strict_commutator):
-        # train singles reach 0.646 of their true displacement, train doubles
-        # 0.869, test doubles 1.039 - the directly supervised conditions are the
-        # worst reproduced. That inversion is a pair of cancelling errors: singles
-        # 35 % short, composition non-additivity 8x too large, adding back to land
-        # near 1.0 on doubles while pointing the wrong way (gene cosine 0.837).
-        #
-        # Use it WITH resid_weight. Constraining either half alone lets the model
-        # push the error into the other, which is how the cancellation formed.
-        #
-        # Scale: this loss starts around ||z_a - z_ctrl||^2 / latent_dim, the same
-        # order as the flow-matching term, so a weight near 1 already competes.
-        "endpoint_weight": 0.0,
-        # Endpoint matching for the singles that DO NOT EXIST in training.
-        #
-        # endpoint_weight above supervises Phi_a(z_ctrl) -> z_a for every training
-        # condition. A drug with no training single gets no such term, and the only
-        # data touching it is a combination, where rho can absorb any share of the
-        # displacement - so its operator is unidentified. 13 of combosciplex's 17
-        # drugs are in that position, including both drugs behind the two test
-        # singles, which carry 76 % of the gap to the Table 3 target.
-        #
-        # The target is the ridge additive fit's effect vector w_a, pooled over
-        # every TRAINING condition the drug appears in (baselines.fit_ridge_additive,
-        # the same fit behind model.anchor=ridge), encoded through the frozen VAE.
-        # It is an estimate under additivity, not ground truth, so it is weighted
-        # BELOW endpoint_weight: it should identify the operator and then yield to
-        # flow matching, not pin it. On combosciplex that estimate scores
-        # resid_R2 0.192 / edist_rel 0.440 on validation conditions including the
-        # held-out singles, which is the quality being borrowed.
-        #
-        # Requires split.method/data such that every drug appears in some training
-        # condition (true for both datasets here). 0 = off.
-        "pseudo_single_weight": 0.0,
-        # Integration steps for that term only. The residual is a population-mean
-        # quantity, so one point is integrated rather than the batch, and step
-        # count was measured not to matter (resid_R2 -0.9577 at 20 steps vs
-        # -0.9825 at 100). Small keeps the kernel-launch cost down.
-        "resid_steps": 5,
+
+        # --- the residual target ---
+        # ridge  r_S = m_S - m_ctrl - sum_a w_a, the residual the additive component
+        #        leaves. Computable for every training combination WITHOUT reading a
+        #        single condition, which is what makes it usable where 13 of 17 drugs
+        #        never appear alone.
+        # true   r_S = m_S - m_A - m_B + m_ctrl, the textbook interaction. Needs both
+        #        singles, so it does not exist for most combosciplex drugs. Kept for
+        #        Norman's additive split, where it DOES exist, as a check that the
+        #        ridge residual is the right target rather than a convenient one.
+        "residual_target": "ridge",  # ridge | true
+
         # --- minibatch OT coupling; never random pairing ---
+        # Computed in OBSERVABLE space (K ~ 550) rather than gene space (G = 5,000).
+        # A minibatch OT plan is an ESTIMATE of the true plan, and the estimate is
+        # the leading hypothesis for scPKFM's unexplained asymmetry: sharp OT helped
+        # Norman (-0.0661 +/- 0.0093 over 3 seeds - the one properly measured
+        # positive result in that project) and hurt combosciplex (+0.0194), and the
+        # two differ 5x in cells per condition, so batch 48 saw 13 % of a Norman
+        # condition against 2.4 % of a combosciplex one. Twenty times fewer
+        # dimensions is the other half of that ratio.
         "coupling": "uot",  # uot | ot | random (random is a control only)
         "uot_reg": 0.05,
         "uot_reg_marginal": 1.0,
         # A degenerate plan (non-finite, or no mass) falls back to random pairing for
-        # that batch. It is counted and logged per epoch, and training stops when a
-        # larger share of an epoch's batches fell back: the fallback used to be
-        # silent, and a reg too small for the cost scale makes it happen on every
-        # batch (measured 600/600 without cost normalisation at reg 0.1).
+        # that batch. It is counted per epoch and training STOPS when more than this
+        # share of an epoch's batches fell back: the fallback used to be silent, and
+        # a reg too small for the cost scale made it happen on every batch (measured
+        # 600/600 without cost normalisation at reg 0.1).
         "coupling_fallback_max": 0.05,
-        # Weight of the operator-graph penalty (model.operator_graph_mode=penalty).
-        # The penalty is a relative distance, so 1 is comparable to the flow-matching
-        # term. Off during the singles warm-up, then ramped linearly to full weight
-        # over operator_graph_ramp_epochs (similarity.penalty_ramp).
-        "operator_graph_weight": 0.0,
-        "operator_graph_ramp_epochs": 100,
-        # Composition-magnitude penalty (loop.rho_penalty): mean |rho|^2 over mean
-        # |z1 - z0|^2 - the share of the needed velocity rho carries - on every
-        # training combination's flow-matching batch. The
-        # combination data fix u_a + u_b + rho but not how it splits, so a drug seen
-        # only in combinations can carry an arbitrary u_a - measured: held-out
-        # Dasatinib alone pointed opposite to its true shift (cos -0.26, -0.31). A
-        # small weight picks, among equally good fits, the one that explains most by
-        # u_a + u_b. It must stay small: Panobinostat and Dacinostat combinations
-        # need rho (turning it off moved their training L2 0.8 -> 1.3-2.1).
-        # Pre-registered arms 2026-09-18: 0.01 and 0.1. 0 = off.
-        "rho_penalty_weight": 0.0,
-        # 0 = fit the latent standardisation once before stage 2 and keep it.
-        #
-        # Do not turn this on without a reason. Refitting mid-training moves the
-        # latent coordinates, and the velocity field was learned in the old ones:
-        # measured at every refit, fm jumped 0.0087 -> 1.146 and each window came
-        # back worse than the previous one. The encoder does drift when it is
-        # fine-tuned, but the reconstruction term bounds that drift, which is the
-        # cheaper of the two problems.
-        "latent_renorm_every": 0,
-        # Epochs between mid-training checkpoints, written as
-        # checkpoint_partial.pt. 0 disables. Stage 2 at 600 epochs runs for days
-        # and the only save used to be after evaluation, so a kill or an OOM
-        # discarded the whole run including a finished stage 1.
-        "stage2_save_every": 25,
-        "n_integration_steps": 20,
-        "grad_clip": 1.0,
+
+        # Epochs between mid-training checkpoints. 0 disables. A long run whose only
+        # save is after evaluation loses everything to a kill or an OOM.
+        "save_every": 25,
         "device": "cuda",
         "seed": 0,
         "out_dir": "results/runs",

@@ -7,9 +7,15 @@ Measured on this gene space (docs/PIPELINE-v1.pdf 4.2):
 
 53 of the 101 targets are in no usable pathway - HOX/FOX/DLX/LHX/POU3F2 and the
 rest of the developmental TF block, which KEGG simply does not catalogue. Gene
-selection cannot fix that, so `n_free_tokens` rows with an all-zero prior are
-appended: for those the mask reduces to act(alpha * M_residual) and the model
-builds its own tokens. That costs no extra data and leaks nothing.
+selection cannot fix that.
+
+scPKFM answered it with `n_free_tokens` all-zero rows appended here, for which its
+attention mask reduced to act(alpha * M_residual) and the model invented its own
+tokens. That answer does not transfer: this matrix IS the observable space, and a
+row of zeros is an observable that reads nothing. Here an uncovered target gets an
+ANCHOR coordinate in models/observables.py - the gene itself, read directly - so
+the observable space can always see the quantity being perturbed. Everything this
+module returns is therefore a real pathway.
 """
 
 from __future__ import annotations
@@ -63,7 +69,6 @@ def build_prior(config: dict, gene_names: np.ndarray) -> tuple[np.ndarray, list[
     convention replaces the old tokenizer/vocab alignment entirely, so there is no
     name-matching step that can silently misalign rows and columns.
     """
-    model_cfg = config["model"]
     kegg_dir = config["data"]["kegg_dir"]
     gene_set = {name: i for i, name in enumerate(gene_names)}
 
@@ -104,10 +109,12 @@ def build_prior(config: dict, gene_names: np.ndarray) -> tuple[np.ndarray, list[
 
     prior = np.stack(kept_rows) if kept_rows else np.zeros((0, len(gene_names)), np.float32)
 
-    n_free = model_cfg["n_free_tokens"]
-    if n_free:
-        prior = np.concatenate([prior, np.zeros((n_free, len(gene_names)), np.float32)])
-        kept_names += [f"<free {i}>" for i in range(n_free)]
+    # scPKFM appended model.n_free_tokens all-zero rows here, so its attention had
+    # tokens with no prior to invent structure in. There are none here: this matrix
+    # IS the observable space, and a row of zeros would be an observable that reads
+    # nothing. Perturbation targets that no pathway covers - 53 of Norman's 101 -
+    # get their own ANCHOR coordinate in models/observables.py, which is an explicit
+    # gene rather than a free parameter.
     return prior, kept_names
 
 
