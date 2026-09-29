@@ -100,17 +100,32 @@ class PathwayKoopmanResidual(nn.Module):
                                dtype=self.additive_weights.dtype)
         return self.additive_weights[perturbations].sum(dim=0)
 
+    def source_observables(self, x: torch.Tensor,
+                           perturbations: list[int]) -> torch.Tensor:
+        """Phi(x + sum_a w_a), [B, K]: the state AFTER the additive move.
+
+        The operator acts here, not on the raw control cell, and the two are not
+        interchangeable. With the raw cell the operator would be asked to produce the
+        WHOLE observable displacement, additive part included, while W is asked to read
+        out only the residual - two different quantities, so the flow-matching target
+        and the readout's job would disagree.
+
+        An earlier version of this file argued the opposite, that shifting the source
+        would make the residual depend on the additive component's output and repeat
+        scPKFM's coupling between its operators and rho. That argument does not apply:
+        the additive component is a BUFFER, fitted in closed form and never updated, so
+        there is nothing for the residual to compete with. scPKFM's failure needed two
+        LEARNED terms able to explain the same displacement.
+
+        It also shortens the transport the coupling has to estimate, which is the other
+        half of why the OT plan should be better conditioned here.
+        """
+        return self.observables(x + self.additive(perturbations))
+
     def observable_displacement(self, x: torch.Tensor,
                                 perturbations: list[int]) -> torch.Tensor:
-        """(exp(B_S) - I) Phi(x), [B, K]. Identically zero unless |S| >= 2.
-
-        The additive shift is NOT applied to x before Phi. The two terms are additive
-        in gene space and the residual is a function of the CONTROL cell's observables,
-        so feeding the shifted cell in would make the residual depend on the additive
-        component's own output - which is the coupling that made scPKFM's operators and
-        rho unidentifiable from each other.
-        """
-        p0 = self.observables(x)
+        """(exp(B_S) - I) Phi(x + sum_a w_a), [B, K]. Zero unless |S| >= 2."""
+        p0 = self.source_observables(x, perturbations)
         if len(perturbations) < 2:
             return torch.zeros_like(p0)
         return self.operators.flow(p0, perturbations) - p0
