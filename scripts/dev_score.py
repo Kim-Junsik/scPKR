@@ -68,10 +68,15 @@ BLOCKS = ("double", "single")
 
 
 def find_run(tag: str) -> str | None:
-    hits = sorted(glob.glob(os.path.join(ROOT, "results", "runs", f"{tag}_*", "checkpoint.pt")))
-    if len(hits) > 1:
-        raise SystemExit(f"tag {tag} matches {len(hits)} finished runs: {hits}")
-    return os.path.dirname(hits[0]) if hits else None
+    """The run directory for a tag, matched EXACTLY.
+
+    scPKFM's version globbed `{tag}_*` because run.sh appended a suffix describing the
+    configuration. scripts/train.py uses the tag it is given, so a glob would now match
+    a longer tag that merely starts the same way - `w1_base_sv0_s0` would also match
+    `w1_base_sv0_s0x` - and silently score the wrong run.
+    """
+    path = os.path.join(ROOT, "results", "runs", tag)
+    return path if os.path.exists(os.path.join(path, "checkpoint.pt")) else None
 
 
 def family(dataset: str, group: str) -> str:
@@ -86,38 +91,44 @@ def weighted_l2(blocks: dict[str, float]) -> float:
     return sum(TABLE3_WEIGHTS[b] * blocks[b] for b in BLOCKS)
 
 
-def score_run(run_dir: str, device: str, n_cells: int,
-              rho_off: bool = False) -> dict[str, float | None]:
-    """Mean L2 of the validation doubles and of the validation singles.
+def score_run(run_dir: str, device: str, n_cells: int) -> dict[str, float | None]:
+    """Mean L2 of the validation doubles and of the validation singles, plus residual_cos.
 
-    One transport pass, doubles first. measure_transport draws its cells from one
-    rng in condition order, so the doubles consume exactly the draws
-    paper_table.compute_l2(..., group="double") consumes and their mean is
-    bit-identical to it; the singles come after and cannot disturb it.
+    One transport pass, doubles first. measure_transport draws its cells from one rng in
+    condition order, so the doubles consume exactly the draws
+    paper_table.compute_l2(..., group="double") consumes and their mean is bit-identical
+    to it; the singles come after and cannot disturb it.
 
-    `rho_off` scores the same weights with the learned composition switched off
-    (v = sum_a u_a for combinations). The rng is reseeded identically, so a
-    run scored both ways is compared on the very same cells. Singles never use
-    rho, so their scores do not move.
+    RESIDUAL_COS IS REPORTED BESIDE L2 BECAUSE resid_R2 CANNOT BE USED FOR THIS MODEL.
+    resid_R2 measures the prediction against the RAW additive arithmetic
+    m_A + m_B - m_ctrl, while this model's additive component is a ridge fit; the gap
+    between the two enters as an offset and the statistic stops meaning what it says.
+    Measured on the Norman smoke run: L2 1.5379 -> 1.4637, a clear improvement, while
+    resid_R2_pooled read -0.195.
+
+    residual_cos is the right quantity and it converts straight into an expected L2: with
+    cosine rho and norm ratio k the remaining error is ||r|| sqrt(1 - 2 k rho + k^2),
+    minimised at k = rho. Since ||r|| IS the additive baseline's L2, a run's rho says what
+    its L2 would be if the residual were scaled optimally - which separates "the direction
+    is wrong" from "the scale is wrong", and the two smoke runs had opposite deficits.
     """
-    from src.eval.diagnostics import (condition_groups, load_run, measure_transport,
-                                      scdfm_eval_genes)
+    from src.eval.diagnostics import load_run, measure_transport
+    from src.eval.conditions import condition_groups, scdfm_eval_genes
 
-    config, data, stats, fold, vae, field = load_run(run_dir, device, "soft")
-    if rho_off:
-        field.composition_kind = "additive"
+    config, data, stats, fold, model = load_run(run_dir, device, "soft")
     rng = np.random.default_rng(config["eval"]["seed"])
     groups = condition_groups(data, stats, fold, config["split"]["method"])
     doubles, singles = groups["test doubles"], groups["test singles"]
     genes = scdfm_eval_genes(data, fold, 1000)
-    rows = measure_transport(vae, field, data, stats, doubles + singles,
-                             config, rng, device, n_cells, genes=genes)
-    by_condition = {r["condition"]: r["l2"] for r in rows}
-    out: dict[str, float | None] = {
-        "double": float(np.mean([by_condition[c] for c in doubles])) if doubles else float("nan"),
-        "single": float(np.mean([by_condition[c] for c in singles])) if singles else None,
+    rows = measure_transport(model, data, stats, doubles + singles, config, rng,
+                             device, n_cells, genes=genes)
+    l2 = {r["condition"]: r["l2"] for r in rows}
+    cos = {r["condition"]: r["residual_cos"] for r in rows}
+    return {
+        "double": float(np.mean([l2[c] for c in doubles])) if doubles else float("nan"),
+        "single": float(np.mean([l2[c] for c in singles])) if singles else None,
+        "residual_cos": float(np.nanmean([cos[c] for c in doubles + singles])),
     }
-    return out
 
 
 def pooled_sd(groups: list[list[float]]) -> tuple[float, int]:
@@ -223,8 +234,10 @@ def main() -> None:
         if group != current:
             # Validation folds differ in cache AND split; drop both caches so a
             # later fold can never be scored with an earlier fold's split or cells.
+            # Validation folds differ in cache AND split, so the cells must be
+            # dropped between groups. There is no fold cache to clear here: folds come
+            # straight from splits.folds on each load.
             diagnostics._DATASETS.clear()
-            diagnostics._FOLDS.clear()
             current = group
         blocks = score_run(run_dir, args.device, args.n_cells)
         l2 = weighted_l2(blocks)
