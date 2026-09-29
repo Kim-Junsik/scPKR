@@ -34,7 +34,8 @@ def _cost_matrix(source: torch.Tensor, target: torch.Tensor) -> np.ndarray:
 
 
 def coupling_plan(source: torch.Tensor, target: torch.Tensor, method: str,
-                  reg: float, reg_marginal: float) -> np.ndarray:
+                  reg: float, reg_marginal: float,
+                  stop_thr: float = 1e-2) -> np.ndarray:
     n, m = source.shape[0], target.shape[0]
     a = np.full(n, 1.0 / n)
     b = np.full(m, 1.0 / m)
@@ -45,13 +46,31 @@ def coupling_plan(source: torch.Tensor, target: torch.Tensor, method: str,
     if method == "ot":
         return ot.emd(a, b, cost)
     if method == "uot":
-        return ot.unbalanced.sinkhorn_unbalanced(a, b, cost, reg=reg, reg_m=reg_marginal)
+        # A loose threshold is only free at a large enough reg. Measured across batch
+        # 64/256 and dimension 32/128/413: at reg 0.05 the plan is identical (2e-16) in
+        # every combination, while at reg 0.01 and 0.005 it depends on the geometry and
+        # moves by up to 7e-5. A smaller reg makes a sharper plan, which converges more
+        # slowly - standard Sinkhorn behaviour.
+        #
+        # So this REFUSES rather than warns. A quietly non-converged plan is a silent
+        # correctness problem: it does not look like a failure, it looks like a slightly
+        # different experiment, which is the class of bug this repository exists to avoid.
+        if reg < 0.05 and stop_thr > 1e-4:
+            raise ValueError(
+                f"train.uot_stop_thr={stop_thr:g} is only verified identical to a "
+                f"converged plan at uot_reg >= 0.05, and uot_reg={reg:g}. At a smaller "
+                f"reg the plan is sharper and stops short: measured up to 7e-5 of total "
+                f"variation in the sampling law. Set train.uot_stop_thr=1e-6 for this reg "
+                f"- the solve is 2-3x slower and correct.")
+        return ot.unbalanced.sinkhorn_unbalanced(a, b, cost, reg=reg, reg_m=reg_marginal,
+                                                 stopThr=stop_thr)
     raise ValueError(f"unknown coupling {method!r}")
 
 
 def sample_pairs(source: torch.Tensor, target: torch.Tensor, method: str,
                  reg: float, reg_marginal: float, rng: np.random.Generator,
-                 stats: dict | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+                 stats: dict | None = None,
+                 stop_thr: float = 1e-2) -> tuple[torch.Tensor, torch.Tensor]:
     """INDEX pairs drawn from the transport plan, treating it as a joint law.
 
     Sampling rather than taking a hard assignment keeps the plan's mass structure: a
@@ -62,7 +81,7 @@ def sample_pairs(source: torch.Tensor, target: torch.Tensor, method: str,
     spaces at once - the field is supervised on observables and the head on the target
     CELL - and re-deriving the second from the first is how the two silently drift apart.
     """
-    plan = coupling_plan(source, target, method, reg, reg_marginal)
+    plan = coupling_plan(source, target, method, reg, reg_marginal, stop_thr)
     flat = plan.reshape(-1)
     total = flat.sum()
     degenerate = not np.isfinite(total) or total <= 0

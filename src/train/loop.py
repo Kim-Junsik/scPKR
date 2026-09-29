@@ -173,7 +173,8 @@ def train(model, data, stats, train_conditions: list[str], config: dict,
             rows, columns = sample_pairs(p0, p1, train_cfg["coupling"],
                                          float(train_cfg["uot_reg"]),
                                          float(train_cfg["uot_reg_marginal"]),
-                                         rng, stats=coupling_stats)
+                                         rng, stats=coupling_stats,
+                                         stop_thr=float(train_cfg["uot_stop_thr"]))
             p0c, p1c = p0[rows], p1[columns]
             x_target_c = x_target[columns]
 

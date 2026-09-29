@@ -414,6 +414,28 @@ DEFAULTS: dict[str, Any] = {
         "coupling": "uot",  # uot | ot | random (random is a control only)
         "uot_reg": 0.05,
         "uot_reg_marginal": 1.0,
+        # Sinkhorn's convergence threshold. POT defaults to 1e-6, which is far stricter
+        # than the PLAN needs: its error measures the change in the scaling vectors, and
+        # the plan itself stabilises long before that. At the default uot_reg the sampling
+        # law at 1e-2 matches a plan solved to 1e-12 with 20,000 iterations to 3e-16 -
+        # identical in float64 - while the solve takes 30-42 % of the time (17.4 -> 5.3 ms
+        # at batch 256). That is 24 % of a whole training step.
+        #
+        # A THRESHOLD RATHER THAN AN ITERATION CAP, because the cap that suffices depends
+        # on reg - 50 iterations at reg 0.05, 100 at 0.01, 500 at 0.005 - so a fixed cap
+        # would silently truncate a smaller reg.
+        #
+        # IT IS ONLY FREE AT reg >= 0.05. Measured across batch 64/256 and dimension
+        # 32/128/413: at reg 0.05 the plan is identical in every combination, while at
+        # 0.01 and 0.005 it depends on the geometry and moves by up to 7e-5. A smaller reg
+        # makes a sharper plan and converges more slowly. coupling_plan REFUSES the
+        # combination rather than warning - use 1e-6 if you lower uot_reg, which v1's
+        # coupling experiment did.
+        #
+        # Because the plan is numerically unchanged at the default reg, this does not
+        # alter what any experiment measures: runs made before and after remain
+        # comparable, which is what made it safe to change between experiments.
+        "uot_stop_thr": 1e-2,
         # A degenerate plan (non-finite, or no mass) falls back to random pairing for
         # that batch. It is counted per epoch and training STOPS when more than this
         # share of an epoch's batches fell back: the fallback used to be silent, and
