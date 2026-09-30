@@ -352,8 +352,13 @@ def main() -> None:
     for name in args.power:
         rules[f"power({name})"] = (fit_power, name)
 
-    for family in sorted({r["family"] for r in rows}):
-        mine = [r for r in rows if r["family"] == family]
+    # Split by ARM as well as family. Pooling arms would average models with different
+    # residual directions into one set of quadratic coefficients, and the whole reason to run
+    # this per arm is that an arm's rho sets its ceiling: w8 measured compsum at rho 0.533
+    # against base's 0.464, a ceiling of -15.4 % against -11.4 %, while compsum LOST on L2 at
+    # s = 1. Comparing arms before the calibration can reject the best one.
+    for family, arm in sorted({(r["family"], r["arm"]) for r in rows}):
+        mine = [r for r in rows if r["family"] == family and r["arm"] == arm]
         doubles = [r for r in mine if r["block"] == "double"]
         singles = [r for r in mine if r["block"] == "single"]
         single = float(np.mean(l2(singles, np.zeros(len(singles))))) if singles else None
@@ -368,7 +373,7 @@ def main() -> None:
         if len({r["group"] for r in doubles}) > 1:
             keys.append(("group", "held out by fold, the stricter test"))
 
-        print(f"\n=== {family}   {len(doubles)} double rows over {conditions} conditions, "
+        print(f"\n=== {family}  arm {arm}   {len(doubles)} double rows over {conditions} conditions, "
               f"{len({r['group'] for r in doubles})} folds ===")
         print(f"  s=0, the additive baseline: {floor:.4f}")
         print(f"  per-condition oracle:       {ceiling:.4f}  ({ceiling - floor:+.4f})   "

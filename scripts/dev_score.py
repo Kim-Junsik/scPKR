@@ -258,6 +258,39 @@ def main() -> None:
     blocked = {fam for fam in families
                if any(r["l2_single"] is not None for r in records if r["family"] == fam)}
 
+    # ------------------------------------------------------------------ the ceiling
+    # rho is reported on its own because it, not L2, sets what any amount of calibration can
+    # reach. With cosine rho and the optimal norm ratio k = rho the remaining error is
+    # ||r|| sqrt(1 - rho^2), and ||r|| IS the additive baseline's L2 - so a run's rho fixes
+    # the largest relative reduction available to it, whatever scaling rule is applied
+    # afterwards. Measured: combosciplex sits at rho 0.525, a ceiling of -14.9 %, and Table 3
+    # needs -10.8 %; the per-condition calibration captures 58 % of that ceiling, so passing
+    # needs rho near 0.581. norman:ncomb sits at 0.462 against a -9.8 % requirement it cannot
+    # meet at 44 % capture. That is why an arm is read here first and on L2 second.
+    #
+    # AND WHY THE L2 DELTAS BELOW CAN REJECT THE BEST ARM. They compare arms at s = 1, but
+    # the method includes a calibration fitted afterwards, and an arm with a higher rho and a
+    # worse norm ratio loses at s = 1 while having the higher ceiling. w8 measured exactly
+    # that: compsum reached rho 0.533 against base's 0.464 on the two folds where every arm
+    # ran, and still lost on L2. Read this section, then scripts/dev_rule.py, before the rule.
+    print("")
+    print("=== residual_cos, and the relative L2 reduction it permits ===")
+    for fam in families:
+        rows = [r for r in records if r["family"] == fam]
+        print(f"  {fam}")
+        for arm in sorted({r["arm"] for r in rows}):
+            mine = [r for r in rows if r["arm"] == arm]
+            values = [r["residual_cos"] for r in mine
+                      if r["residual_cos"] is not None and np.isfinite(r["residual_cos"])]
+            if not values:
+                continue
+            rho = float(np.mean(values))
+            sd = float(np.std(values, ddof=1)) if len(values) > 1 else float("nan")
+            ceiling = 1.0 - math.sqrt(max(1.0 - rho ** 2, 0.0))
+            print(f"    {arm:12s} rho {rho:+.4f} +- {sd:.4f} (n={len(values)})   "
+                  f"ceiling {-100 * ceiling:+6.2f} %   "
+                  f"L2 {float(np.mean([r['l2'] for r in mine])):.4f}")
+
     print("\n=== noise: baseline across seeds, pooled within fold ===")
     noise = {}
     for fam in families:
