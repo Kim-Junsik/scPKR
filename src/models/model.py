@@ -88,6 +88,26 @@ class PathwayKoopmanResidual(nn.Module):
                              f"(ridge | none)")
         self.register_buffer("additive_weights", weights, persistent=True)
 
+        # A post-hoc multiplier on the residual, SELECTED ON VALIDATION and applied at
+        # inference. s = 0 is exactly the additive baseline and s = 1 is the trained
+        # model, so the sweep interpolates between them and the chosen value says how much
+        # of the residual generalises.
+        #
+        # WHY IT IS NEEDED. The residual's reliability varies enormously by condition -
+        # measured cosine against the true residual runs from -0.51 to +0.82 across 27
+        # validation conditions - while its MAGNITUDE does not. Since the error is
+        # ||r|| sqrt(1 - 2 k rho + k^2), a condition with rho < 0 is made worse by ANY
+        # residual, and four of 27 conditions regressed by up to +0.555. One residual
+        # magnitude for wildly varying reliability is the mechanism.
+        #
+        # WHY NOT WEIGHT DECAY. Measured: 1e-5 to 1e-2, a thousandfold, moves L2 by 0.003.
+        # The gene-space endpoint loss returns the residual to whatever scale fits the
+        # training conditions and the penalty on ||W|| cannot outbid it.
+        #
+        # It is a scalar and it is chosen on the validation folds, so it cannot launder
+        # test information - and because the residual is LINEAR in it, every value can be
+        # swept from an already-trained run.
+        self.residual_scale = float(config["eval"].get("residual_scale", 1.0))
         self.operators = KoopmanOperators(config, n_perturbations, observables.dim)
         self.readout = Readout(config, observables, self.n_genes)
         self.head = build_head(config, self.n_genes, detection=detection,

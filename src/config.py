@@ -104,6 +104,13 @@ DEFAULTS: dict[str, Any] = {
         # the training doubles before quoting a final target line.
         "ridge_alpha": 1.0,
         "ridge_weight_by_cells": False,
+        # Multiplier on the learned residual, applied at inference. 0 is the additive
+        # baseline exactly, 1 is the trained model. SELECTED ON THE VALIDATION FOLDS, and
+        # swept from already-trained runs because the residual is linear in it. See
+        # models/model.py for the measurement that motivates it: the residual's direction
+        # is reliable on some conditions and anti-correlated on others, while its
+        # magnitude is the same everywhere.
+        "residual_scale": 1.0,
         # Global magnitude correction applied AFTER decoding (predict.fit_alpha).
         # The model's predicted displacement is systematically too short - measured
         # ratio 0.646 on training singles, the conditions the loss supervises most
