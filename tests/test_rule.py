@@ -45,7 +45,10 @@ def synthetic(n_conditions: int = 24, seeds: int = 3, seed: int = 0) -> list[dic
                          "seed": s, "condition": f"c{index}", "block": "double",
                          "best_s": rho * e / r, "ee": e * e, "er": -rho * e * r,
                          "rr": r * r, "residual_norm": r, "inv_residual": 1.0 / r,
-                         "noise": rng.normal()})
+                         "noise": rng.normal(),
+                         # A strictly positive noise column, since the power family needs
+                         # a positive base and would otherwise silently fall back.
+                         "noise_positive": float(np.exp(rng.normal()))})
     return rows
 
 
@@ -59,6 +62,10 @@ def scores(rows: list[dict], key: str = "condition") -> dict[str, float]:
     # 1 / ||r|| is the shape the optimum takes, so the one-parameter rule is given it
     # directly: this is the form the real measurement will be judged on.
     rules["scaled(inv_residual)"] = (dev_rule.fit_scaled, "inv_residual")
+    # The two-parameter family that nests a constant scale at p = 0 and a constant
+    # correction magnitude at p = 1. It must not beat the bar on a noise column either.
+    rules["power(residual_norm)"] = (dev_rule.fit_power, "residual_norm")
+    rules["power(noise_positive)"] = (dev_rule.fit_power, "noise_positive")
     return {label: value for label, value, *_ in
             dev_rule.evaluate(rows, None, key, rules)}
 
@@ -103,6 +110,7 @@ def test_a_noise_predictor_cannot_beat_a_single_global_scale(seed):
     assert result["gate(noise)"] >= bar - 0.002
     assert result["linear(noise)"] >= bar - 0.002
     assert result["scaled(noise)"] >= bar - 0.002
+    assert result["power(noise_positive)"] >= bar - 0.002
 
 
 def test_the_oracle_is_a_ceiling_no_rule_passes():

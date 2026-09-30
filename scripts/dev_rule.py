@@ -177,6 +177,59 @@ def fit_scaled(train: list[dict], name: str):
     return apply, f"s=clip({c:+.3g}x{name})"
 
 
+POWERS = np.arange(0.0, 1.501, 0.1)
+
+
+def fit_power(train: list[dict], name: str):
+    """s = clip(c z^-p, 0, 4). ONE FAMILY that nests both rules the data picked.
+
+    THIS EXISTS TO AVOID CHOOSING A FAMILY OFF A LEADERBOARD. Measured on w6, held out by
+    fold on combosciplex and by condition on Norman, the winners were opposite: s = c/||r||
+    recovered 59-62 % of the oracle on combosciplex where a constant recovered 19 %, and the
+    same rule recovered 16 % on Norman where a constant recovered 51 %. Picking per dataset
+    from seventeen rules scored on the validation folds is the selection problem that made
+    scPKFM unreadable - thirteen structural additions, none of which replicated.
+
+    p = 0 is exactly wconst and p = 1 is a CONSTANT CORRECTION MAGNITUDE, since ||s r||
+    = c when s = c/||r||. So the exponent is a single interpretable quantity: how much of
+    the model's predicted magnitude to keep. p = 0 keeps all of it, p = 1 keeps none and
+    trusts only the direction. Both datasets are fitted in the same family and report their
+    own p, which is a measurement rather than a choice.
+
+    c is fitted by wconst's weighted least squares at each p, and p is then chosen by the
+    training mean L2 - both on the training split alone.
+    """
+    feature_raw = np.array([r[name] for r in train], dtype=float)
+    target = np.array([r["best_s"] for r in train], dtype=float)
+    weight = np.array([r["rr"] for r in train], dtype=float)
+    usable = np.isfinite(feature_raw) & (feature_raw > 1e-9) & np.isfinite(target)
+    if (usable & (weight > 0)).sum() < 3:
+        return fit_const(train, name)
+
+    def coefficient(power: float) -> float:
+        f = np.where(usable, feature_raw, 1.0) ** (-power)
+        keep = usable & (weight > 0)
+        denominator = float(np.sum(weight[keep] * f[keep] ** 2))
+        if denominator <= 0.0:
+            return 0.0
+        return float(np.sum(weight[keep] * f[keep] * target[keep])) / denominator
+
+    def scales(rows: list[dict], power: float, c: float) -> np.ndarray:
+        f = np.array([r[name] for r in rows], dtype=float)
+        good = np.isfinite(f) & (f > 1e-9)
+        return np.clip(np.where(good, c * np.where(good, f, 1.0) ** (-power), 0.0), 0.0, 4.0)
+
+    best, score = (0.0, 0.0), np.inf
+    for power in POWERS:
+        c = coefficient(power)
+        value = float(np.mean(l2(train, scales(train, power, c))))
+        if value < score:
+            best, score = (power, c), value
+    power, c = best
+    return (lambda rows: scales(rows, power, c),
+            f"s=clip({c:.3g}x{name}^-{power:.1f})")
+
+
 def fit_gate(train: list[dict], name: str):
     """s = c where z is above a threshold, 0 below it. Two parameters, both on a grid.
 
@@ -257,6 +310,12 @@ def main() -> None:
                         default=["inv_residual", "ratio_add_res", "inv_obs"],
                         help="features for the one-parameter s = c f rule, which is the "
                              "form the optimum rho ||e|| / ||r|| actually takes")
+    parser.add_argument("--power", nargs="*", default=["residual_norm", "obs_norm"],
+                        help="bases for s = c z^-p, the two-parameter family that nests a "
+                             "constant scale (p=0) and a constant correction magnitude "
+                             "(p=1). residual_norm is the pre-registered base: ||s r|| is "
+                             "what enters the prediction, so it is the quantity a "
+                             "calibration should be expressed in.")
     args = parser.parse_args()
 
     with open(args.csv, encoding="utf-8") as handle:
@@ -290,6 +349,8 @@ def main() -> None:
         rules[f"gate({name})"] = (fit_gate, name)
     for name in args.scaled:
         rules[f"scaled({name})"] = (fit_scaled, name)
+    for name in args.power:
+        rules[f"power({name})"] = (fit_power, name)
 
     for family in sorted({r["family"] for r in rows}):
         mine = [r for r in rows if r["family"] == family]
