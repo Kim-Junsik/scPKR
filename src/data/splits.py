@@ -44,7 +44,15 @@ def derive_combinations(additive_folds: list[dict], control_suffix: str = CONTRO
     for fold in additive_folds:
         test_doubles = list(fold["test"][:N_TEST_DOUBLES_FOR_COMBINATIONS])
         held_out_genes = {gene for pair in test_doubles for gene in pair.split("+")}
-        held_out_singles = [f"{gene}+{control_suffix}" for gene in held_out_genes]
+        # sorted, NOT the set's iteration order. A set of strings iterates in an order that
+        # depends on PYTHONHASHSEED, so this list came out permuted between processes - and
+        # fold["test"] is consumed IN ORDER by measure_transport, which draws control cells
+        # per condition from one rng. Two runs of scripts/dev_score.py on the same
+        # checkpoints therefore reported different single-block numbers: 1.4943 and 1.4935 on
+        # norman:ncomb, while the double block, whose order comes from a list, was identical
+        # to four decimals in both. The reported metric has to be a function of the
+        # checkpoint, not of the process that read it.
+        held_out_singles = [f"{gene}+{control_suffix}" for gene in sorted(held_out_genes)]
         derived.append({
             "test_doubles": test_doubles,
             "held_out_genes": held_out_genes,
@@ -279,7 +287,7 @@ def norman_validation_combinations(reference: list[dict[str, Any]], fold: int,
         raise ValueError(f"validation doubles are also real test doubles: {clash}")
 
     genes = {gene for pair in validation for gene in pair.split("+")}
-    validation_singles = [f"{gene}+{control_suffix}" for gene in genes]
+    validation_singles = [f"{gene}+{control_suffix}" for gene in sorted(genes)]
     # Every double the combinations fold could train on, minus the ones we now score.
     all_doubles = list(source["train"]) + list(source["test"])
     held = set(validation) | set(combination["test_doubles"])

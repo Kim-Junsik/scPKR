@@ -651,3 +651,52 @@ def test_every_combinations_validation_fold_carries_its_trainable_doubles():
 def test_combinations_validation_refuses_a_fold_it_has_no_list_for():
     with pytest.raises(ValueError, match="Norman validation is defined"):
         splits.norman_validation_combinations(_reference(), 3)
+
+
+# --------------------------------------------------------------------------------------
+# Determinism across PROCESSES. Found the expensive way: two runs of scripts/dev_score.py on
+# the same six checkpoints reported single-block L2 of 1.4943 and 1.4935 on norman:ncomb,
+# while the double block was identical to four decimals in both. The cause was that
+# held_out_singles was built by iterating a set of gene names, whose order depends on
+# PYTHONHASHSEED, and fold["test"] is consumed IN ORDER by measure_transport, which draws
+# control cells per condition from a single rng. The doubles' order comes from a list, which
+# is why only the singles moved.
+
+
+def test_held_out_singles_are_in_a_canonical_order():
+    """The invariant. Sorted means hash-order cannot reach it."""
+    reference = _reference()
+    for fold in splits.derive_combinations(reference):
+        assert fold["held_out_singles"] == sorted(fold["held_out_singles"])
+    validation = splits.norman_validation_combinations(reference, 0)[0]
+    assert validation["held_out_singles"] == sorted(validation["held_out_singles"])
+
+
+def test_the_split_is_identical_under_two_hash_seeds():
+    """The property itself, not a proxy for it.
+
+    Run in subprocesses because PYTHONHASHSEED is fixed at interpreter start and cannot be
+    changed from inside. This is the test that would catch a NEW set-derived list somewhere
+    else in the split, which the invariant above would not.
+    """
+    import json
+    import subprocess
+
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    program = (
+        "import json, sys; sys.path.insert(0, %r);"
+        "from src.data import splits;"
+        "r = splits.load(%r);"
+        "d = splits.derive_combinations(r);"
+        "v = splits.norman_validation_combinations(r, 0);"
+        "print(json.dumps([[f['test'] for f in d], [f['test'] for f in v]]))"
+        % (root, os.path.join(root, "data", "norman", "split_results.pkl"))
+    )
+    outputs = []
+    for seed in ("0", "1"):
+        environment = dict(os.environ, PYTHONHASHSEED=seed)
+        result = subprocess.run([sys.executable, "-c", program], capture_output=True,
+                                text=True, env=environment, cwd=root)
+        assert result.returncode == 0, result.stderr
+        outputs.append(json.loads(result.stdout))
+    assert outputs[0] == outputs[1]
