@@ -219,6 +219,67 @@ def norman_validation(reference: list[dict[str, Any]], fold: int) -> list[dict[s
     return derived
 
 
+def norman_validation_combinations(reference: list[dict[str, Any]], fold: int,
+                                   control_suffix: str = CONTROL_SUFFIX
+                                   ) -> list[dict[str, Any]]:
+    """The COMBINATIONS regime, re-split for development. Table 2's structure, not Table 1's.
+
+    WHY THIS HAS TO EXIST. docs/DESIGN.md locates the only two blocks where a learned model
+    beats the closed-form ridge, and both are "combinations with their singles held out":
+    Table 2 Double (+0.220 for scDFM over ridge) and Table 3 (+0.201). Every Norman
+    development run so far used split.validation with method=additive, which is the Table 1
+    regime - the one where ridge already WINS (1.669 against 1.704) and a learned model has
+    0.035 to play for. So one of the two tables that decide the paper had never been
+    measured on validation at all.
+
+    The construction mirrors norman_validation: NORMAN_VALIDATION[fold]'s doubles become the
+    test side, and - this is what makes it Table 2 rather than Table 1 - the SINGLES of every
+    gene appearing in them are held out too, exactly as derive_combinations does for the real
+    test. The real test doubles and their singles go into fold["excluded"], so they are
+    neither trained on nor scored.
+
+    A DISCREPANCY WORTH STATING RATHER THAN HIDING. Training here loses the singles of the
+    validation doubles AND the singles of the real test doubles, where the real Table 2 run
+    loses only the latter. Validation is therefore strictly harder than the test it stands
+    in for, which is the safe direction for a decision but means the ABSOLUTE numbers here
+    are pessimistic and only deltas between arms should be read across.
+    """
+    if fold not in NORMAN_VALIDATION:
+        raise ValueError(f"Norman validation is defined for additive fold(s) "
+                         f"{sorted(NORMAN_VALIDATION)}, not fold {fold}")
+    derived = derive_combinations(reference)
+    source, combination = reference[fold], derived[fold]
+
+    validation = list(NORMAN_VALIDATION[fold])
+    clash = [d for d in validation if d in combination["test_doubles"]]
+    if clash:
+        raise ValueError(f"validation doubles are also real test doubles: {clash}")
+
+    genes = {gene for pair in validation for gene in pair.split("+")}
+    validation_singles = [f"{gene}+{control_suffix}" for gene in genes]
+    # Every double the combinations fold could train on, minus the ones we now score.
+    all_doubles = list(source["train"]) + list(source["test"])
+    held = set(validation) | set(combination["test_doubles"])
+
+    out = list(derived)
+    out[fold] = {
+        "test_doubles": validation,
+        "held_out_genes": genes,
+        "held_out_singles": validation_singles,
+        # Scored: the doubles AND their singles, so the two blocks Table 2 reports
+        # separately are both measured. The single block is structurally guaranteed to equal
+        # the additive baseline here - B_S sums over pairs, so no parameter can move a
+        # single - and scoring it is how that guarantee gets checked rather than assumed.
+        "test": validation + validation_singles,
+        "train_doubles": [c for c in all_doubles if c not in held],
+        # Neither trained on nor scored. The real test's singles are in here too, which is
+        # the source of the discrepancy recorded in this function's docstring.
+        "excluded": list(combination["test"]),
+    }
+    out[fold]["train"] = list(out[fold]["train_doubles"])
+    return out
+
+
 def folds_from_list(config: dict) -> list[dict[str, Any]]:
     """One fold whose test set is an explicit list of conditions.
 
@@ -410,10 +471,13 @@ def folds(config: dict, method: str | None = None) -> list[dict[str, Any]]:
         return folds_generated(config)
     reference = load(config["split"]["reference_pkl"])
     if config["split"].get("validation"):
-        if method != "additive":
-            raise ValueError("split.validation on the reference split is defined for "
-                             "method=additive only")
-        return norman_validation(reference, int(config["split"]["fold"]))
+        fold = int(config["split"]["fold"])
+        if method == "additive":
+            return norman_validation(reference, fold)
+        if method == "combinations":
+            return norman_validation_combinations(reference, fold)
+        raise ValueError("split.validation on the reference split is defined for "
+                         "method=additive and method=combinations only")
     if method == "additive":
         return reference
     if method == "combinations":

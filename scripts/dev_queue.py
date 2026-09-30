@@ -45,6 +45,13 @@ import re
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 NAME = re.compile(r"^[A-Za-z0-9]+$")
 COMBO_SETS = ("cv", "sv")
+# Which Norman regime a queue scores. `nval` is method=additive: every single is in
+# training, which is Table 1 - the table ridge already WINS (1.669 against scDFM's 1.704),
+# so a learned model has 0.035 to play for there. `ncomb` is method=combinations, holding
+# out the singles of every scored double, which is Table 2 Double - one of the only two
+# blocks where scDFM beats ridge at all (+0.220, and Table 3's +0.201 is the other). Every
+# Norman run before this option used nval, so the harder of the two had never been measured.
+NORMAN_SETS = ("nval", "ncomb")
 COMBOSCIPLEX_FOLDS = (0, 1, 2)
 
 # The configuration every arm starts from, as config overrides. Kept here rather than in
@@ -69,7 +76,8 @@ DATASETS = {
 }
 
 
-def dataset_groups(datasets: list[str], combo_folds, combo_set: str) -> list[tuple]:
+def dataset_groups(datasets: list[str], combo_folds, combo_set: str,
+                   norman_set: str = "nval") -> list[tuple]:
     """(dataset, family label, extra overrides) for every validation set requested.
 
     The family label carries the fold, and scripts/dev_score.py pools within a family
@@ -79,12 +87,18 @@ def dataset_groups(datasets: list[str], combo_folds, combo_set: str) -> list[tup
     """
     if combo_set not in COMBO_SETS:
         raise ValueError(f"unknown --combo-set {combo_set!r} ({' | '.join(COMBO_SETS)})")
+    if norman_set not in NORMAN_SETS:
+        raise ValueError(f"unknown --norman-set {norman_set!r} "
+                         f"({' | '.join(NORMAN_SETS)})")
     groups = []
     for dataset in datasets:
         if dataset not in DATASETS:
             raise ValueError(f"unknown dataset {dataset!r} ({' | '.join(DATASETS)})")
         if dataset == "norman":
-            groups.append(("norman", "nval", []))
+            # The method override comes as a group override so it lands AFTER the dataset's
+            # own split.method=additive and replaces it.
+            extra = ([] if norman_set == "nval" else ["split.method=combinations"])
+            groups.append(("norman", norman_set, extra))
         else:
             for fold in combo_folds:
                 extra = [f"split.validation_fold={fold}"]
@@ -107,7 +121,7 @@ def cache_name(dataset: str, family: str, combo_set: str) -> str:
 
 def plan(name: str, datasets: list[str], arms: dict[str, list[str]], seeds: list[int],
          gpus: list[int], combo_folds=COMBOSCIPLEX_FOLDS, combo_set: str = "cv",
-         extra: list[str] = ()) -> list[dict]:
+         extra: list[str] = (), norman_set: str = "nval") -> list[dict]:
     for label in [name, *arms]:
         if not NAME.match(label):
             raise ValueError(f"names must be letters and digits only, got {label!r}")
@@ -116,7 +130,7 @@ def plan(name: str, datasets: list[str], arms: dict[str, list[str]], seeds: list
 
     jobs = []
     for dataset, family, group_overrides in dataset_groups(datasets, combo_folds,
-                                                           combo_set):
+                                                           combo_set, norman_set):
         cache = cache_name(dataset, family, combo_set)
         base = [o for o in DATASETS[dataset] if not o.startswith("data.cache_h5ad=")]
         base = base + [f"data.cache_h5ad={cache}"] + group_overrides + list(extra)
@@ -206,6 +220,11 @@ def main() -> None:
                              "lose to ridge, so sv is the one that matches the target.")
     parser.add_argument("--combo-folds", nargs="+", type=int,
                         default=list(COMBOSCIPLEX_FOLDS))
+    parser.add_argument("--norman-set", default="nval", choices=NORMAN_SETS,
+                        help="nval is method=additive, the Table 1 regime where ridge "
+                             "already beats scDFM; ncomb is method=combinations with the "
+                             "scored doubles' singles held out, which is Table 2 Double - "
+                             "one of the two blocks that decide the paper.")
     parser.add_argument("--set", dest="extra", nargs="*", default=[],
                         help="overrides added to every job")
     args = parser.parse_args()
@@ -218,7 +237,7 @@ def main() -> None:
         arms[label] = value.split()
 
     jobs = plan(args.name, args.datasets, arms, args.seeds, args.gpus,
-                tuple(args.combo_folds), args.combo_set, args.extra)
+                tuple(args.combo_folds), args.combo_set, args.extra, args.norman_set)
     out_dir = os.path.join("results", "dev", args.name)
     write(args.name, jobs, args.gpus, out_dir)
 

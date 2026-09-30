@@ -398,12 +398,28 @@ def test_norman_validation_is_defined_for_fold_zero_only(config):
         splits.folds(_norman_validation_config(config, fold=1), "additive")
 
 
-def test_norman_validation_refuses_combinations(config):
-    with pytest.raises(ValueError, match="additive only"):
-        splits.folds(_norman_validation_config(config), "combinations")
+def test_norman_validation_serves_combinations_as_the_table_2_regime(config):
+    """This used to assert a refusal. method=combinations is now defined deliberately.
+
+    docs/DESIGN.md's table says the only two blocks where a learned model beats the
+    closed-form ridge are combinations with their singles held out - Table 2 Double and
+    Table 3 - so a validation split for the Table 2 regime is a requirement, not a
+    convenience. What identifies it is that the scored doubles' singles are held out;
+    method=additive holds out no single at all.
+    """
+    fold = splits.folds(_norman_validation_config(config), "combinations")[0]
+    additive = splits.folds(_norman_validation_config(config), "additive")[0]
+    assert fold["held_out_singles"], "combinations must hold out the scored doubles' singles"
+    assert not additive.get("held_out_singles")
+    assert fold["test_doubles"] == additive["test"]
 
 
-@pytest.mark.parametrize("method", ["additive"])
+def test_norman_validation_still_refuses_an_unknown_method(config):
+    with pytest.raises(ValueError, match="additive and method=combinations only"):
+        splits.folds(_norman_validation_config(config), "generated_pairs")
+
+
+@pytest.mark.parametrize("method", ["additive", "combinations"])
 def test_norman_validation_training_never_sees_validation_or_test(config, method):
     cache = config["data"]["cache_h5ad"]
     if not os.path.exists(cache):
@@ -547,3 +563,73 @@ def test_validation_singles_needs_a_validation_fold(combosciplex_config,
     not_validation["split"]["validation_singles"] = True
     with pytest.raises(ValueError, match="validation=true"):
         splits.folds(not_validation)
+
+
+# --------------------------------------------------------------------------------------
+# The Table 2 regime on validation. Added after docs/DESIGN.md's table was re-read: the only
+# two blocks where a learned model beats the closed-form ridge are combinations with their
+# singles held out (Table 2 Double, +0.220; Table 3, +0.201), and every Norman development
+# run until this split existed used method=additive - the Table 1 regime, where ridge WINS by
+# 0.035 and there is almost nothing for a learned model to take.
+
+
+def _reference():
+    import os
+
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "norman",
+                        "split_results.pkl")
+    if not os.path.exists(path):
+        pytest.skip("Norman reference split is not present")
+    return splits.load(path)
+
+
+def test_combinations_validation_holds_out_the_scored_doubles_singles():
+    """The property that makes this Table 2 and not Table 1.
+
+    A scored double's own single must not be trainable. If it were, the ridge would fit
+    w_a directly from it and the block would turn back into Table 1, where ridge already
+    beats scDFM and the measurement says nothing about the two blocks that matter.
+    """
+    fold = splits.norman_validation_combinations(_reference(), 0)[0]
+    genes = {gene for pair in fold["test_doubles"] for gene in pair.split("+")}
+    assert genes == set(fold["held_out_genes"])
+    for gene in genes:
+        single = f"{gene}+{splits.CONTROL_SUFFIX}"
+        assert single in fold["held_out_singles"]
+        assert single in fold["test"]
+        assert single not in fold["train_doubles"]
+
+
+def test_combinations_validation_leaks_neither_its_own_test_nor_the_real_one():
+    """Nothing scored and nothing belonging to the REAL test may be trainable.
+
+    The second half is the one a validation split gets wrong quietly: re-splitting the
+    training side is easy to do while leaving the real test doubles trainable, and a
+    decision made that way is tuned on the test set. They go to fold["excluded"], which
+    baselines.training_conditions already treats as held.
+    """
+    reference = _reference()
+    fold = splits.norman_validation_combinations(reference, 0)[0]
+    real = splits.derive_combinations(reference)[0]
+
+    trainable = set(fold["train_doubles"])
+    assert not trainable & set(fold["test"])
+    assert not trainable & set(fold["excluded"])
+    assert set(real["test"]) <= set(fold["excluded"])
+    # And the validation doubles must be real training doubles, never a slice of the test.
+    assert not set(fold["test_doubles"]) & set(real["test_doubles"])
+
+
+def test_combinations_validation_keeps_every_other_fold_untouched():
+    """Only the requested fold is re-split, so the object stays a fold LIST."""
+    reference = _reference()
+    derived = splits.derive_combinations(reference)
+    out = splits.norman_validation_combinations(reference, 0)
+    assert len(out) == len(derived)
+    for index in range(1, len(derived)):
+        assert out[index]["test"] == derived[index]["test"]
+
+
+def test_combinations_validation_refuses_a_fold_it_has_no_list_for():
+    with pytest.raises(ValueError, match="Norman validation is defined"):
+        splits.norman_validation_combinations(_reference(), 3)
