@@ -54,6 +54,29 @@ def derive_combinations(additive_folds: list[dict], control_suffix: str = CONTRO
     return derived
 
 
+def attach_combination_training(derived: list[dict], additive_folds: list[dict]
+                                ) -> list[dict]:
+    """Give every combinations fold its trainable doubles. Mutates and returns `derived`.
+
+    combinations holds out only the FIRST 15 test doubles, so every other double is
+    trainable - including the ones the additive fold put in test. Deriving train from the
+    additive train instead would silently shrink it from 110 doubles to 88.
+
+    Factored out because it was inline in folds() and norman_validation_combinations did
+    not repeat it, so four of its five folds came back without `train_doubles` and
+    run_baselines.py died on a KeyError after the cache had already been built. Both paths
+    now call this, which is the only way the two cannot drift.
+    """
+    for fold, source in zip(derived, additive_folds):
+        all_doubles = list(source["train"]) + list(source["test"])
+        held = set(fold["test"])
+        fold["train_doubles"] = [c for c in all_doubles if c not in held]
+        # Singles are added by the caller, which knows which ones the data actually
+        # contains; see baselines.training_conditions.
+        fold["train"] = list(fold["train_doubles"])
+    return derived
+
+
 def _read_obs(config: dict, needs: tuple[str, ...] = ()):
     """obs from the cache when it can answer, otherwise from the raw file.
 
@@ -247,7 +270,7 @@ def norman_validation_combinations(reference: list[dict[str, Any]], fold: int,
     if fold not in NORMAN_VALIDATION:
         raise ValueError(f"Norman validation is defined for additive fold(s) "
                          f"{sorted(NORMAN_VALIDATION)}, not fold {fold}")
-    derived = derive_combinations(reference)
+    derived = attach_combination_training(derive_combinations(reference), reference)
     source, combination = reference[fold], derived[fold]
 
     validation = list(NORMAN_VALIDATION[fold])
@@ -481,19 +504,7 @@ def folds(config: dict, method: str | None = None) -> list[dict[str, Any]]:
     if method == "additive":
         return reference
     if method == "combinations":
-        derived = derive_combinations(reference)
-        for fold, source in zip(derived, reference):
-            # combinations holds out only the FIRST 15 test doubles, so every
-            # other double is trainable - including the ones the additive fold
-            # put in test. Deriving train from the additive train instead would
-            # silently shrink it from 110 doubles to 88.
-            all_doubles = list(source["train"]) + list(source["test"])
-            held = set(fold["test"])
-            fold["train_doubles"] = [c for c in all_doubles if c not in held]
-            # Singles are added by the caller, which knows which ones the data
-            # actually contains; see baselines.training_conditions.
-            fold["train"] = list(fold["train_doubles"])
-        return derived
+        return attach_combination_training(derive_combinations(reference), reference)
     raise ValueError(f"unknown split method {method!r}")
 
 

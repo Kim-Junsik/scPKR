@@ -630,6 +630,24 @@ def test_combinations_validation_keeps_every_other_fold_untouched():
         assert out[index]["test"] == derived[index]["test"]
 
 
+def test_every_combinations_validation_fold_carries_its_trainable_doubles():
+    """EVERY fold, not just the re-split one. This is a regression test for a real failure.
+
+    norman_validation_combinations bypassed the loop in folds() that attaches
+    `train_doubles`, so four of the five folds came back without it and
+    scripts/run_baselines.py died on a KeyError - after data_prepare.py had already spent
+    the time building the cache. The fix was to factor that loop into
+    attach_combination_training and have both paths call it; this asserts the outcome
+    rather than the refactor.
+    """
+    out = splits.norman_validation_combinations(_reference(), 0)
+    for index, fold in enumerate(out):
+        assert "train_doubles" in fold, f"fold {index} has no train_doubles"
+        assert "train" in fold, f"fold {index} has no train"
+        assert fold["train_doubles"], f"fold {index} has an empty train_doubles"
+        assert not set(fold["train_doubles"]) & set(fold["test"])
+
+
 def test_combinations_validation_refuses_a_fold_it_has_no_list_for():
     with pytest.raises(ValueError, match="Norman validation is defined"):
         splits.norman_validation_combinations(_reference(), 3)
