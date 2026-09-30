@@ -426,3 +426,117 @@ def test_every_readout_starts_at_zero(readout):
     """Whatever the scaffold, the premise holds: the residual is zero at step 0."""
     model = build(readout=readout)
     assert float(model.residual(control_cells(), [1, 3]).abs().max()) == 0.0
+
+
+# ==========================================================================
+# THE PER-CONDITION RESIDUAL CALIBRATION, s = clip(c ||r||^-p, 0, s_max)
+# ==========================================================================
+# Selected on the validation folds by scripts/dev_rule.py. On experiment w6, held out by
+# FOLD, combosciplex chose p = 0.8 and recovered 58 % of the per-condition oracle where the
+# best transferable constant recovered 19 %; Norman chose p = 0.0, the family declining the
+# exponent where it could not help. These three assert the properties the rest of the design
+# needs to survive it.
+
+
+def build_calibrated(coefficient, power, scale_max=4.0, **overrides
+                     ) -> PathwayKoopmanResidual:
+    """build() with the calibration configured, which lives under eval rather than model."""
+    settings = [f"model.{k}={v}" for k, v in overrides.items()]
+    settings += [f"eval.residual_coefficient={coefficient}",
+                 f"eval.residual_power={power}",
+                 f"eval.residual_scale_max={scale_max}"]
+    config = config_module.load(settings)
+    torch.manual_seed(0)
+    model = PathwayKoopmanResidual(config, FakeObservables(), N_PERTURBATIONS,
+                                   additive_weights())
+    return model.eval()
+
+
+def test_the_calibration_leaves_the_premise_intact():
+    """An untrained model must STILL predict exactly the additive baseline.
+
+    ||r|| is zero at initialisation because W is, and c ||r||^-p is an infinity there for any
+    positive p. condition_scale returns 0 instead, which is why it guards the norm rather
+    than trusting the arithmetic. If this fires, a calibrated run does not start from a
+    measured floor - the one thing this design buys.
+    """
+    from src.eval.predict import condition_residual
+
+    # soft, because point_estimate realises exact zeros under the sample gate and the
+    # premise is a statement about the MEAN.
+    model = build_calibrated(1.0, 0.8, hurdle_gate="soft")
+    cells = control_cells()
+    perturbations = [0, 1]
+    mean, scale = condition_residual(model, cells.numpy(), perturbations, "cpu")
+    assert np.abs(mean).max() == 0.0
+    assert scale == 0.0
+    predicted = model.predict_scaled(cells, perturbations, scale)
+    assert torch.allclose(predicted, cells + model.additive(perturbations), atol=1e-5)
+
+
+def test_the_calibration_at_power_zero_is_exactly_a_constant_scale():
+    """p = 0 must reduce to s = c, since that is the power family's nesting claim.
+
+    scripts/dev_rule.py fits ONE family per dataset rather than picking a family off a
+    leaderboard, and that is defensible only because p = 0 IS the constant rule. If the two
+    disagreed numerically, Norman's measured p = 0.0 would not mean what it was reported to
+    mean.
+    """
+    from src.eval.predict import condition_residual
+
+    plain = build(hurdle_gate="soft")
+    fill_readout(plain)
+    cells = control_cells()
+    perturbations = [0, 1]
+    _, unit = condition_residual(plain, cells.numpy(), perturbations, "cpu")
+    assert unit == 1.0, "with no rule configured the constant residual_scale applies"
+
+    model = build_calibrated(0.37, 0.0, hurdle_gate="soft")
+    model.load_state_dict(plain.state_dict())
+    _, scale = condition_residual(model, cells.numpy(), perturbations, "cpu")
+    assert scale == pytest.approx(0.37)
+    assert torch.allclose(
+        model.predict_scaled(cells, perturbations, scale),
+        cells + plain.additive(perturbations)
+        + 0.37 * plain.residual(cells, perturbations), atol=1e-5)
+
+
+def test_the_calibration_overrides_the_constant_rather_than_multiplying_it():
+    """residual_scale must be forced to 1 when the rule is on.
+
+    The coefficient was fitted against the model's RAW residual, so leaving a non-unit
+    residual_scale in place would hand the calibration an input it was never fitted on and
+    scale twice without saying so.
+    """
+    config = config_module.load(["eval.residual_coefficient=2.0", "eval.residual_power=0.5",
+                                "eval.residual_scale=0.5"])
+    torch.manual_seed(0)
+    model = PathwayKoopmanResidual(config, FakeObservables(), N_PERTURBATIONS,
+                                   additive_weights())
+    assert model.residual_scale == 1.0
+
+
+def test_the_calibration_shrinks_a_large_residual_and_grows_a_small_one():
+    """p > 0 must move the two directions apart, which is the entire point of an exponent.
+
+    Two readouts differing only in magnitude must come out with scales ordered the other
+    way: at p = 1 the product s ||r|| is constant, so the calibration keeps the residual's
+    DIRECTION and discards its magnitude - which is what combosciplex's fitted p = 0.8 says
+    the data wants.
+    """
+    from src.eval.predict import condition_residual
+
+    cells, perturbations, scales, norms = control_cells(), [0, 1], [], []
+    for magnitude in (0.05, 0.5):
+        # scale_max is lifted out of the way: this test is about the exponent, and at c = 1
+        # both residuals are small enough that the default clip of 4 would bind on both and
+        # make them compare equal.
+        model = build_calibrated(1.0, 1.0, scale_max=1e6)
+        fill_readout(model, scale=magnitude)
+        mean, scale = condition_residual(model, cells.numpy(), perturbations, "cpu")
+        scales.append(scale)
+        norms.append(float(np.linalg.norm(mean)))
+    assert norms[0] < norms[1]
+    assert scales[0] > scales[1]
+    # At p = 1 the applied correction has the same size whatever the model produced.
+    assert scales[0] * norms[0] == pytest.approx(scales[1] * norms[1], rel=1e-6)

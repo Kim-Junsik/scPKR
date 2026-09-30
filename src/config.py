@@ -111,6 +111,27 @@ DEFAULTS: dict[str, Any] = {
         # is reliable on some conditions and anti-correlated on others, while its
         # magnitude is the same everywhere.
         "residual_scale": 1.0,
+        # The per-condition calibration, s = clip(c ||r||^-p, 0, s_max), applied at
+        # inference over the condition's own mean residual. p = 0 reduces it to a constant
+        # scale and p = 1 makes the CORRECTION MAGNITUDE constant, keeping only the
+        # residual's direction. residual_coefficient = null switches it off and
+        # residual_scale alone applies.
+        #
+        # Both are SELECTED ON THE VALIDATION FOLDS by scripts/dev_rule.py, which fits them
+        # in closed form from three numbers per condition and cross-validates by holding out
+        # whole folds. Measured there on w6: combosciplex chose p = 0.8 and recovered 58 % of
+        # the per-condition oracle where the best transferable constant recovered 19 %;
+        # Norman chose p = 0.0, i.e. the family declined the exponent where it could not help.
+        "residual_coefficient": None,
+        "residual_power": 0.0,
+        # LOAD-BEARING, not cosmetic. At p = 1 a condition whose residual is near zero
+        # demands an enormous s, and that is the direction the earlier reliability
+        # measurement says is WRONG: a small residual's cosine is dominated by noise, so its
+        # sign is close to a coin toss (AUC 0.82 on combosciplex, 0.94 on Norman). Verified
+        # on a short combosciplex run: at c = 0.5, p = 1 the four scored doubles asked for
+        # 1.05, 0.98, 1.27 and 4.0, the last one clipped. The cap is what keeps the 1/||r||
+        # shape from amplifying exactly the conditions it should leave alone.
+        "residual_scale_max": 4.0,
         # Global magnitude correction applied AFTER decoding (predict.fit_alpha).
         # The model's predicted displacement is systematically too short - measured
         # ratio 0.646 on training singles, the conditions the loss supervises most

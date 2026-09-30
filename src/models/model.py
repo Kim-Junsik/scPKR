@@ -108,6 +108,16 @@ class PathwayKoopmanResidual(nn.Module):
         # test information - and because the residual is LINEAR in it, every value can be
         # swept from an already-trained run.
         self.residual_scale = float(config["eval"].get("residual_scale", 1.0))
+        coefficient = config["eval"].get("residual_coefficient")
+        self.residual_coefficient = None if coefficient is None else float(coefficient)
+        self.residual_power = float(config["eval"].get("residual_power", 0.0))
+        self.residual_scale_max = float(config["eval"].get("residual_scale_max", 4.0))
+        if self.residual_coefficient is not None:
+            # The rule OWNS the scale. Leaving residual_scale in place would multiply the
+            # two, and the coefficient was fitted against the raw residual - ||r|| in
+            # c ||r||^-p is the model's unscaled output - so compounding them would apply a
+            # calibration to an input it was never fitted on.
+            self.residual_scale = 1.0
         self.operators = KoopmanOperators(config, n_perturbations, observables.dim)
         self.readout = Readout(config, observables, self.n_genes)
         self.head = build_head(config, self.n_genes, detection=detection,
@@ -156,9 +166,50 @@ class PathwayKoopmanResidual(nn.Module):
         """W (exp(B_S) - I) Phi(x), [B, G]."""
         return self.readout(self.observable_displacement(x, perturbations))
 
+    def condition_scale(self, residual_mean: torch.Tensor) -> float:
+        """s for one condition, from the norm of its OWN mean residual.
+
+        s = clip(c ||r||^-p, 0, s_max), and it is a per-CONDITION quantity, so it cannot be
+        computed inside forward() from a minibatch - the caller passes the mean over the
+        condition's cells. src/eval/predict.py does that in a first pass.
+
+        It is inference-only and appears in no training loss. That is deliberate: the
+        exponent is a statement about how much of the model's predicted MAGNITUDE
+        generalises, which is only answerable against held-out conditions, and a term in the
+        objective would be fitted on the training ones where the magnitude is already right.
+
+        ||r|| = 0 gives s = 0 rather than an infinity. That is the case at initialisation,
+        where W is zero, and it is what keeps the premise intact: an untrained model still
+        predicts exactly the additive baseline with the rule switched on.
+        """
+        if self.residual_coefficient is None:
+            return self.residual_scale
+        norm = float(torch.linalg.norm(residual_mean))
+        if norm <= 1e-12:
+            return 0.0
+        return float(min(max(self.residual_coefficient * norm ** (-self.residual_power),
+                             0.0), self.residual_scale_max))
+
     def displacement(self, x: torch.Tensor, perturbations: list[int]) -> torch.Tensor:
         """The whole Delta x, [B, G]. At W = 0 this is exactly sum_a w_a."""
         return self.additive(perturbations) + self.residual(x, perturbations)
+
+    def displacement_scaled(self, x: torch.Tensor, perturbations: list[int],
+                            scale: float) -> torch.Tensor:
+        """Delta x with an explicit residual scale, for the per-condition calibration.
+
+        Separate from displacement() because `scale` comes from the condition's whole
+        population and cannot be known inside a minibatch. Training never calls this.
+        """
+        residual = self.residual(x, perturbations)
+        return self.additive(perturbations) + (residual if scale == 1.0
+                                               else scale * residual)
+
+    def predict_scaled(self, x: torch.Tensor, perturbations: list[int],
+                       scale: float) -> torch.Tensor:
+        """predict() with an explicit residual scale."""
+        return self.head.point_estimate(
+            self.head(x + self.displacement_scaled(x, perturbations, scale)))
 
     # ------------------------------------------------------------------ forward
 

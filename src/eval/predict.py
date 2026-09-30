@@ -24,6 +24,30 @@ from . import metrics
 
 
 @torch.no_grad()
+def condition_residual(model, cells: np.ndarray, perturbations: list[int], device: str,
+                       chunk: int = 512) -> tuple[np.ndarray, float]:
+    """The condition's mean RAW residual and the scale the calibration gives it.
+
+    One definition used by both scoring paths. predict_cells needs the scale before it can
+    predict and measure_transport needs the mean residual to report anyway, and when the two
+    computed it separately they would drift - which is exactly how scPKFM ended up with an
+    alpha correction that was a no-op in one path and live in the other.
+
+    Returns the UNSCALED mean so a caller can report ||r|| and s separately; the model forces
+    residual_scale to 1 whenever the rule is active, so this really is the raw residual.
+    """
+    total, seen = None, 0
+    for start in range(0, cells.shape[0], max(chunk, 1)):
+        x = torch.as_tensor(cells[start:start + chunk], device=device)
+        part = model.residual(x, perturbations).sum(dim=0)
+        total = part if total is None else total + part
+        seen += x.shape[0]
+    mean = (total / max(seen, 1)) if total is not None else torch.zeros(
+        model.n_genes, device=device)
+    return mean.cpu().numpy(), model.condition_scale(mean)
+
+
+@torch.no_grad()
 def predict_cells(model, control_cells: np.ndarray, condition: str,
                   pert_index: dict[str, int], device: str, naming,
                   chunk: int = 512) -> np.ndarray:
@@ -42,10 +66,15 @@ def predict_cells(model, control_cells: np.ndarray, condition: str,
     """
     model.eval()
     perturbations = [pert_index[g] for g in condition_genes(condition, naming)]
+    # The per-condition calibration needs the whole population's mean residual, so it costs
+    # a first pass. Only when it is switched on: without it `scale` is the constant the
+    # model already carries and the single pass is unchanged.
+    scale = (condition_residual(model, control_cells, perturbations, device, chunk)[1]
+             if model.residual_coefficient is not None else model.residual_scale)
     pieces = []
     for start in range(0, control_cells.shape[0], max(chunk, 1)):
         x = torch.as_tensor(control_cells[start:start + chunk], device=device)
-        pieces.append(model.predict(x, perturbations).cpu().numpy())
+        pieces.append(model.predict_scaled(x, perturbations, scale).cpu().numpy())
     return pieces[0] if len(pieces) == 1 else np.concatenate(pieces, axis=0)
 
 

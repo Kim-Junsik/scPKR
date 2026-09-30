@@ -23,7 +23,7 @@ from ..models.observables import Observables
 from . import baselines
 from .baselines import ConditionMeans, training_conditions
 from .conditions import condition_groups, scdfm_eval_genes  # re-exported for callers
-from .predict import predict_cells
+from .predict import condition_residual, predict_cells
 
 _DATASETS: dict = {}
 
@@ -115,7 +115,8 @@ def build_model(config: dict, data, stats, fold: dict, method: str, device: str)
 
 
 def load_run(run_dir: str, device: str = "cpu", gate: str | None = None,
-             checkpoint_name: str = "checkpoint.pt"):
+             checkpoint_name: str = "checkpoint.pt",
+             eval_overrides: dict | None = None):
     """Rebuild a finished run from its checkpoint.
 
     `gate` overrides model.hurdle_gate for THIS load only. The gate decides how the head
@@ -134,6 +135,16 @@ def load_run(run_dir: str, device: str = "cpu", gate: str | None = None,
     config["train"]["device"] = config["eval"]["device"] = device
     if gate:
         config["model"]["hurdle_gate"] = gate
+    # The per-condition calibration is fitted on the validation folds AFTER training, so the
+    # checkpoint's config cannot carry it and a scored run has to be told. Only config["eval"]
+    # keys may be overridden here: anything under model or train would change what the saved
+    # weights mean, and load_state_dict would either fail or quietly reinterpret them.
+    if eval_overrides:
+        unknown = set(eval_overrides) - set(config["eval"])
+        if unknown:
+            raise ValueError(f"eval_overrides has keys config['eval'] does not define: "
+                             f"{sorted(unknown)}")
+        config["eval"].update(eval_overrides)
 
     data, stats = _dataset(config)
     method = config["split"]["method"]
@@ -183,13 +194,15 @@ def measure_transport(model, data, stats, conditions: list[str], config,
         perturbations = [data.pert_index[g] for g in data.naming.genes(condition)]
 
         additive = model.additive(perturbations).cpu().numpy()
-        residual_parts, observable_parts = [], []
+        # Through the same helper predict_cells uses, so the residual reported here is the
+        # one the L2 below was computed from rather than a second, separately scaled copy.
+        raw_residual, scale = condition_residual(model, sample, perturbations, device, chunk)
+        residual = scale * raw_residual
+        observable_parts = []
         for start in range(0, sample.shape[0], max(chunk, 1)):
             x = torch.as_tensor(sample[start:start + chunk], device=device)
-            residual_parts.append(model.residual(x, perturbations).cpu().numpy())
             observable_parts.append(
                 model.observable_displacement(x, perturbations).cpu().numpy())
-        residual = np.concatenate(residual_parts, axis=0).mean(axis=0)
         observable = np.concatenate(observable_parts, axis=0).mean(axis=0)
 
         predicted = predict_cells(model, sample, condition, data.pert_index,
@@ -224,5 +237,8 @@ def measure_transport(model, data, stats, conditions: list[str], config,
             # Observable space: the coordinates the operator actually acts in, so a gap
             # between this and residual_cos localises the loss to the readout.
             "observable_norm": float(np.linalg.norm(observable)),
+            # The scale the per-condition calibration chose, so a scored run records what
+            # was applied instead of leaving it to be inferred from the config.
+            "residual_scale": float(scale),
         })
     return rows
