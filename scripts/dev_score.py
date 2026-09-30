@@ -215,7 +215,7 @@ def main() -> None:
 
     records, missing, current, seen = [], [], None, {}
     print(f"{'run tag':34s} {'family':17s} {'group':5s} {'arm':10s} {'seed':>4s} "
-          f"{'L2':>8s} {'double':>8s} {'single':>8s}")
+          f"{'L2':>8s} {'double':>8s} {'single':>8s} {'cos':>7s}")
     for job in sorted(jobs, key=lambda j: (j["dataset"], j["group"], j["arm"], j["seed"])):
         fam = family(job["dataset"], job["group"])
         key = (fam, job["group"], job["arm"], job["seed"])
@@ -244,10 +244,12 @@ def main() -> None:
         records.append({"tag": job["tag"], "family": fam, "dataset": job["dataset"],
                         "group": job["group"], "arm": job["arm"], "seed": job["seed"],
                         "run": os.path.basename(run_dir), "l2": l2,
-                        "l2_double": blocks["double"], "l2_single": blocks["single"]})
+                        "l2_double": blocks["double"], "l2_single": blocks["single"],
+                        "residual_cos": blocks["residual_cos"]})
         single = f"{blocks['single']:8.4f}" if blocks["single"] is not None else f"{'-':>8s}"
         print(f"{job['tag'][:33]:34s} {fam:17s} {job['group']:5s} {job['arm']:10s} "
-              f"{job['seed']:4d} {l2:8.4f} {blocks['double']:8.4f} {single}")
+              f"{job['seed']:4d} {l2:8.4f} {blocks['double']:8.4f} {single} "
+              f"{blocks['residual_cos']:7.4f}")
     if missing:
         print(f"\nnot finished yet ({len(missing)}): {', '.join(missing)}")
 
