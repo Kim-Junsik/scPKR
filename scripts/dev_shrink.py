@@ -100,6 +100,19 @@ def l2_curve(row: dict, scales) -> list[float]:
     return [float(np.linalg.norm(error + s * row["residual"])) for s in scales]
 
 
+def quadratic(row: dict) -> tuple[float, float, float]:
+    """(||e||^2, e.r, ||r||^2), so L2(s) = sqrt(ee + 2 s er + s^2 rr) for ANY s.
+
+    Emitted because it makes every downstream question free. A per-condition scaling rule
+    is evaluated by putting its s into this expression - no run is reloaded, no cell is
+    re-predicted, and the answer is exact rather than interpolated off the grid. A single
+    perturbation has r = 0, so rr = 0 and the L2 is constant in s, which is the structural
+    property rather than a special case to guard.
+    """
+    error, residual = row["base"] - row["true"], row["residual"]
+    return (float(error @ error), float(error @ residual), float(residual @ residual))
+
+
 def optimum(row: dict) -> tuple[float, float]:
     """The s minimising THIS condition's L2, in closed form, and the L2 there.
 
@@ -228,10 +241,12 @@ def main() -> None:
         for row in rows:
             curve = l2_curve(row, scales)
             best_s, best_l2 = optimum(row)
+            ee, er, rr = quadratic(row)
             records.append({
                 "family": family(job["dataset"], job["group"]), "group": job["group"],
                 "arm": job["arm"], "seed": job["seed"], "condition": row["condition"],
                 "block": row["block"], "best_s": best_s, "best_l2": best_l2,
+                "ee": ee, "er": er, "rr": rr,
                 **{f"s{s:g}": value for s, value in zip(scales, curve)},
             })
         print(f"  {job['tag']:38s} {len(rows)} conditions")

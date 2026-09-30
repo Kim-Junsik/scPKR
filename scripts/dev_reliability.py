@@ -225,6 +225,9 @@ def main() -> None:
             "family": row["family"], "group": row["group"], "arm": row["arm"],
             "seed": int(row["seed"]), "condition": row["condition"],
             "block": row["block"], "best_s": best,
+            # Carried through from the sweep so this CSV alone determines L2 at any s:
+            # L2(s) = sqrt(ee + 2 s er + s^2 rr).
+            "ee": float(row["ee"]), "er": float(row["er"]), "rr": float(row["rr"]),
             # The oracle, split into the two questions. `helps` is sign(rho), which is the
             # only thing that decides whether ANY positive scale can improve a condition.
             "helps": best > 0.0,
