@@ -296,6 +296,27 @@ class Observables(nn.Module):
     def _matrix_for_fit(self) -> np.ndarray:
         return self.matrix.detach().cpu().numpy()
 
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        """Supply an identity whitener for checkpoints written before it existed.
+
+        `whitener` was added after 78 runs had already been trained, and a new buffer makes
+        load_state_dict fail outright under its default strict=True - so every one of those
+        runs became unscoreable the moment the buffer landed. An old checkpoint was trained
+        with no whitening at all, and the identity is exactly that, so the upgrade is not an
+        approximation: it reproduces the model that was saved.
+
+        The same thing happened once in scPKFM when the head's values grew a rank axis, and
+        it was fixed the same way. The lesson that did not transfer is that a buffer added
+        to a module in a repository full of finished runs needs this hook IN THE SAME
+        COMMIT, not after a sweep has failed to score.
+        """
+        key = prefix + "whitener"
+        if key not in state_dict:
+            state_dict[key] = torch.eye(self.matrix.shape[0],
+                                        dtype=self.matrix.dtype,
+                                        device=self.matrix.device)
+        return super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """[B, G] -> [B, K]. One matmul; no parameters, no gradient of its own."""
         standardised = (x @ self.matrix.T - self.mean) / self.std

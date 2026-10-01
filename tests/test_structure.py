@@ -609,3 +609,25 @@ def test_whitening_leaves_the_span_untouched():
     residual = b - (b @ basis.T) @ basis
     assert np.linalg.norm(residual) / np.linalg.norm(b) < 1e-5
     assert np.linalg.matrix_rank(a, tol=1e-5) == np.linalg.matrix_rank(b, tol=1e-5)
+
+
+def test_a_checkpoint_written_before_whitening_still_loads():
+    """78 runs were trained before `whitener` existed and must stay scoreable.
+
+    A new buffer makes load_state_dict fail under its default strict=True, which turned
+    every finished run unscoreable the moment the buffer landed - discovered when a sweep
+    over four experiments died on the first checkpoint. The identity is not a fallback but
+    the exact model those runs had, so this asserts the loaded module reproduces the saved
+    one rather than merely surviving the load.
+    """
+    observables, x = _observables("none")
+    saved = {k: v for k, v in observables.state_dict().items() if k != "whitener"}
+    assert "whitener" not in saved
+
+    fresh, _ = _observables("none")
+    with torch.no_grad():
+        fresh.whitener.normal_()          # make the identity impossible to get by accident
+    fresh.load_state_dict(saved)
+    assert torch.allclose(fresh.whitener, torch.eye(fresh.matrix.shape[0]), atol=0)
+    cells = torch.from_numpy(x)
+    assert torch.allclose(fresh(cells), observables(cells), atol=1e-6)
