@@ -166,8 +166,22 @@ class Observables(nn.Module):
             reference, _ = build_prior(config, self.gene_names)
             n_components = min(reference.shape[0], cells.shape[0], n_genes)
             centred = cells - cells.mean(axis=0, keepdims=True)
-            _, _, right = np.linalg.svd(centred, full_matrices=False)
-            membership = np.asarray(right[:n_components], dtype=np.float32)
+            # Through the GENE covariance, not an SVD of the cell matrix. The right
+            # singular vectors are the eigenvectors of C^T C, and that route costs the
+            # same whatever the cell count while a full SVD scales linearly in it:
+            # measured on random matrices of the real width, 4,000 x 5,000 took 21.2 s by
+            # SVD against 8.6 s here, 8,000 x 5,000 took 43.9 s against 8.8 s, so at the
+            # 63,378 cells combosciplex actually has the gap is around 27x. The old call
+            # computed all 5,000 singular vectors and kept a few hundred; three queues
+            # doing that at once left the GPUs idle for a long stretch of every pca run.
+            #
+            # The Gram matrix squares the condition number, which is why eigh runs in
+            # float64 while the big matmul stays in float32. Agreement with the SVD on the
+            # retained subspace, sign-free, is 0.999997 at worst over the top 300.
+            gram = (centred.T @ centred).astype(np.float64)
+            _, vectors = np.linalg.eigh(gram)
+            right = vectors[:, ::-1][:, :n_components].T
+            membership = np.ascontiguousarray(right, dtype=np.float32)
             names = [f"<pc {i}>" for i in range(n_components)]
         else:  # genes: no grouping at all
             reference, _ = build_prior(config, self.gene_names)

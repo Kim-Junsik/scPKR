@@ -185,9 +185,20 @@ def write(name: str, jobs: list[dict], gpus: list[int], out_dir: str) -> None:
                 lines += [f'while [ ! -f "{cache}" ]; do sleep 30; done', ""]
         for job in mine:
             overrides = " ".join(job["overrides"])
-            lines += [f'echo "=== {job["tag"]} ==="',
-                      f'CUDA_VISIBLE_DEVICES={gpu} python scripts/train.py '
+            checkpoint = f'results/runs/{job["tag"]}/checkpoint.pt'
+            # SKIP WHAT IS ALREADY DONE, so a queue can be interrupted and restarted.
+            # scripts/train.py refuses to overwrite a checkpoint and these scripts run
+            # under `set -e`, so without this guard a restart aborts on the first finished
+            # run - which turns any interruption into "throw the queue away or pass
+            # --force and destroy the comparison". A run of w8 took 4,085 s, so a queue is
+            # hours long and being unable to resume it is expensive.
+            lines += [f'if [ -f "{checkpoint}" ]; then',
+                      f'  echo "=== {job["tag"]} (done, skipping) ==="',
+                      "else",
+                      f'  echo "=== {job["tag"]} ==="',
+                      f'  CUDA_VISIBLE_DEVICES={gpu} python scripts/train.py '
                       f'--tag {job["tag"]} --set {overrides}',
+                      "fi",
                       ""]
         path = os.path.join(out_dir, f"gpu{gpu}.sh")
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
