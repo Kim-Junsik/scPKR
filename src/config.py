@@ -236,6 +236,15 @@ DEFAULTS: dict[str, Any] = {
         # Seed for observables=random and for the random readout scaffold. Fixed so
         # both ablations are reproducible.
         "observable_seed": 0,
+        # Decorrelate the observable coordinates after standardising them, within the SAME
+        # span. Added to separate two explanations of why PCA observables beat KEGG ones on
+        # combosciplex (-0.0379 +- 0.0167 against -0.0173 +- 0.0136 at the same dense
+        # readout, with KEGG indistinguishable from RANDOM observables at -0.0155 +-
+        # 0.0188): either the biological SPAN is wrong, or the basis is simply
+        # ill-conditioned because KEGG pathways share genes and PCA's axes are orthogonal by
+        # construction. Whitening leaves the span untouched, so it moves only the second.
+        "observable_whiten": "none",
+        "observable_whiten_floor": 1e-3,
 
         # --- the operator: A_a, acting on the observables ---
         #   A_a = U diag(c_a) V + P_a Q_a

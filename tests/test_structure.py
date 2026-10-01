@@ -540,3 +540,72 @@ def test_the_calibration_shrinks_a_large_residual_and_grows_a_small_one():
     assert scales[0] > scales[1]
     # At p = 1 the applied correction has the same size whatever the model produced.
     assert scales[0] * norms[0] == pytest.approx(scales[1] * norms[1], rel=1e-6)
+
+
+# ==========================================================================
+# WHITENING THE OBSERVABLES: same span, different basis
+# ==========================================================================
+# Added to decide between the two explanations of why PCA observables beat KEGG ones on
+# combosciplex. At the same dense readout the pre-registered rule adopted pcadense
+# (-0.0379 +- 0.0167) and rejected rodense (-0.0173 +- 0.0136), and KEGG was
+# indistinguishable from RANDOM observables of the same width (-0.0155 +- 0.0188). Either
+# the biological SPAN is wrong, or the basis is ill-conditioned because KEGG pathways share
+# genes while PCA's axes are orthogonal by construction. These two tests establish that
+# whitening moves the second and not the first, which is what makes the experiment a
+# decision rather than one more arm.
+
+
+def _observables(whiten: str, n_genes: int = 60, n_cells: int = 400, seed: int = 0):
+    from src.models.observables import Observables
+
+    rng = np.random.default_rng(seed)
+    x = rng.gamma(2.0, 0.6, size=(n_cells, n_genes)).astype(np.float32)
+    names = np.array([f"g{i}" for i in range(n_genes)])
+    config = config_module.load([f"model.observable_whiten={whiten}",
+                                 "model.observables=random",
+                                 "model.anchor_genes=variance", "model.n_anchor_genes=8"])
+    return Observables(config, names, x, np.arange(n_cells), ["g0", "g1"]), x
+
+
+def test_whitening_decorrelates_the_coordinates():
+    """zca must make the coordinate correlation the identity on the rows it was fitted on.
+
+    Measured here rather than asserted: the unwhitened coordinates of a random dictionary
+    already reach 0.117 off-diagonal correlation on synthetic data, and real KEGG pathways
+    share genes far more heavily than that.
+    """
+    for whiten, bound in (("none", None), ("zca", 1e-4)):
+        observables, x = _observables(whiten)
+        p = observables(torch.from_numpy(x)).detach().numpy()
+        correlation = np.corrcoef(p.T)
+        off = np.abs(correlation - np.eye(len(correlation))).max()
+        if bound is None:
+            assert off > 1e-3, "the unwhitened case must not already be decorrelated"
+        else:
+            assert off < bound, f"zca left {off:.2e} of off-diagonal correlation"
+
+
+def test_whitening_leaves_the_span_untouched():
+    """The row space of the effective map must be identical, or this tests the wrong thing.
+
+    Whitening is only defensible as a test of the BASIS if it cannot change which subspace
+    of gene space the observables can see. The effective map is W diag(1/std) M, and
+    multiplying on the left by an invertible W cannot change its row space - asserted
+    numerically, because an eigenvalue floor is applied to the inverse square root and a
+    floor that bites would silently drop a direction.
+    """
+    plain, _ = _observables("none")
+    white, _ = _observables("zca")
+    rows = []
+    for observables in (plain, white):
+        effective = (observables.whitener
+                     @ torch.diag(1.0 / observables.std)
+                     @ observables.matrix).detach().numpy()
+        rows.append(effective)
+    a, b = rows
+    assert a.shape == b.shape
+    # Project each row of b onto the row space of a; nothing may be left over.
+    basis = np.linalg.svd(a, full_matrices=False)[2]
+    residual = b - (b @ basis.T) @ basis
+    assert np.linalg.norm(residual) / np.linalg.norm(b) < 1e-5
+    assert np.linalg.matrix_rank(a, tol=1e-5) == np.linalg.matrix_rank(b, tol=1e-5)

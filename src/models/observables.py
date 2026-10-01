@@ -222,6 +222,8 @@ class Observables(nn.Module):
         self.register_buffer("matrix", torch.from_numpy(matrix), persistent=True)
         self.register_buffer("mean", torch.from_numpy(self._mean), persistent=True)
         self.register_buffer("std", torch.from_numpy(self._std), persistent=True)
+        self.register_buffer("whitener", self._fit_whitener(config, cells),
+                             persistent=True)
 
     # ------------------------------------------------------------------ interface
 
@@ -244,9 +246,60 @@ class Observables(nn.Module):
         """
         return slice(self.n_pathways, self.dim)
 
+    def _fit_whitener(self, config: dict, cells: np.ndarray) -> torch.Tensor:
+        """The [K, K] map that decorrelates the coordinates, or the identity.
+
+        WHAT THIS IS FOR. PCA observables beat KEGG ones by a margin the pre-registered
+        rule adopts (-0.0379 +- 0.0167 against -0.0173 +- 0.0136 for KEGG with the same
+        dense readout), and KEGG is indistinguishable from RANDOM observables of the same
+        width (-0.0155 +- 0.0188). Two explanations fit that, and they have opposite
+        consequences for the paper:
+
+          the SPAN is wrong   - the biology does not describe the right subspace
+          the BASIS is wrong  - KEGG pathways share genes heavily so the coordinates are
+                                strongly correlated, where PCA's are orthogonal by
+                                construction
+
+        Whitening separates them, because it changes ONLY the basis: the row space of M is
+        untouched, so a model that recovers PCA's performance after whitening says the
+        biological subspace was never the problem.
+
+        It is not a no-op even though A_a is a general K x K matrix that could absorb any
+        change of basis. Two things here are basis-dependent: A_a is LOW RANK
+        (shared_rank + private_rank, so which directions it can reach depends on the
+        coordinates), and gradient descent is not invariant to a change of basis whatever
+        the parameterisation.
+
+        ZCA rather than PCA whitening - the symmetric inverse square root - because it is
+        the decorrelating map closest to the identity, so each whitened coordinate stays as
+        close as it can to the pathway it came from. Fitted on TRAINING ROWS ONLY, like the
+        standardisation it follows, and stored in the checkpoint.
+        """
+        mode = config["model"].get("observable_whiten", "none")
+        size = self.matrix.shape[0]
+        if mode == "none":
+            return torch.eye(size, dtype=torch.float32)
+        if mode != "zca":
+            raise ValueError(f"unknown model.observable_whiten {mode!r} (none | zca)")
+        coordinates = (cells @ self._matrix_for_fit().T - self._mean) / self._std
+        centred = coordinates - coordinates.mean(axis=0, keepdims=True)
+        covariance = (centred.T @ centred).astype(np.float64) / max(len(centred) - 1, 1)
+        values, vectors = np.linalg.eigh(covariance)
+        # A floor rather than a pseudo-inverse: KEGG pathways are redundant enough that
+        # some directions carry almost no variance, and inverting those would amplify
+        # noise into coordinates the operator then has to spend capacity undoing.
+        floor = float(config["model"].get("observable_whiten_floor", 1e-3))
+        values = np.maximum(values, floor * max(float(values.max()), 1e-12))
+        inverse_root = (vectors / np.sqrt(values)) @ vectors.T
+        return torch.from_numpy(np.ascontiguousarray(inverse_root, dtype=np.float32))
+
+    def _matrix_for_fit(self) -> np.ndarray:
+        return self.matrix.detach().cpu().numpy()
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """[B, G] -> [B, K]. One matmul; no parameters, no gradient of its own."""
-        return (x @ self.matrix.T - self.mean) / self.std
+        standardised = (x @ self.matrix.T - self.mean) / self.std
+        return standardised @ self.whitener.T
 
     def edges(self) -> tuple[torch.Tensor, torch.Tensor]:
         """(gene, observable) index pairs W may be non-zero on: the support of M.T.
