@@ -43,7 +43,13 @@ import itertools
 import numpy as np
 
 TABLE3 = {"double": 5 / 7, "single": 2 / 7}
-GRID = np.arange(0.0, 4.001, 0.05)
+# The cap on s. It was set at 4 from combosciplex, where it bound only on the occasional
+# near-zero residual, and that was a safety choice rather than a measured one. On
+# norman:ncomb the fitted rule puts 45 of 60 conditions AT it, so the cap decides three
+# quarters of that family and has become an unexamined hyperparameter doing real work.
+# --scale-max exists to measure it rather than carry it into a one-time test scoring.
+SCALE_MAX = 4.0
+GRID = np.arange(0.0, SCALE_MAX + 0.001, 0.05)
 
 
 def l2(rows: list[dict], scales: np.ndarray) -> np.ndarray:
@@ -123,9 +129,9 @@ def _fit_weighted(train: list[dict], name: str | None, slope: bool):
                                        target[keep] * sqrt_w[:, 0], rcond=None)
     a = float(coefficients[0])
     if not slope:
-        return lambda rows: np.full(len(rows), min(max(a, 0.0), 4.0)), f"s={a:.2f}w"
+        return lambda rows: np.full(len(rows), min(max(a, 0.0), SCALE_MAX)), f"s={a:.2f}w"
     b = float(coefficients[1])
-    return (lambda rows: np.clip(a + b * z(rows), 0.0, 4.0),
+    return (lambda rows: np.clip(a + b * z(rows), 0.0, SCALE_MAX),
             f"s=clip({a:+.2f}{b:+.2f}z)")
 
 
@@ -172,7 +178,7 @@ def fit_scaled(train: list[dict], name: str):
 
     def apply(rows: list[dict]) -> np.ndarray:
         f = np.array([r[name] for r in rows], dtype=float)
-        return np.clip(np.where(np.isfinite(f), c * f, 0.0), 0.0, 4.0)
+        return np.clip(np.where(np.isfinite(f), c * f, 0.0), 0.0, SCALE_MAX)
 
     return apply, f"s=clip({c:+.3g}x{name})"
 
@@ -217,7 +223,8 @@ def fit_power(train: list[dict], name: str):
     def scales(rows: list[dict], power: float, c: float) -> np.ndarray:
         f = np.array([r[name] for r in rows], dtype=float)
         good = np.isfinite(f) & (f > 1e-9)
-        return np.clip(np.where(good, c * np.where(good, f, 1.0) ** (-power), 0.0), 0.0, 4.0)
+        scaled = np.where(good, c * np.where(good, f, 1.0) ** (-power), 0.0)
+        return np.clip(scaled, 0.0, SCALE_MAX)
 
     best, score = (0.0, 0.0), np.inf
     for power in POWERS:
@@ -274,7 +281,7 @@ def fit_power2(train: list[dict], _name: str | None = None):
             if denominator <= 0.0:
                 continue
             c = float(np.sum(weight[usable] * f[usable] * target[usable])) / denominator
-            value = float(np.mean(l2(train, np.clip(c * f, 0.0, 4.0))))
+            value = float(np.mean(l2(train, np.clip(c * f, 0.0, SCALE_MAX))))
             if value < score:
                 best, score = (q, p, c), value
     q, p, c = best
@@ -282,7 +289,7 @@ def fit_power2(train: list[dict], _name: str | None = None):
     def apply(rows: list[dict]) -> np.ndarray:
         a = np.array([r.get("additive_norm", np.nan) for r in rows], dtype=float)
         r = np.array([r.get("residual_norm", np.nan) for r in rows], dtype=float)
-        return np.clip(c * feature(a, r, q, p), 0.0, 4.0)
+        return np.clip(c * feature(a, r, q, p), 0.0, SCALE_MAX)
 
     return apply, f"s=clip({c:.3g}xadd^{q:.2f}xres^-{p:.1f})"
 
@@ -357,6 +364,7 @@ def evaluate(doubles: list[dict], single: float | None, key: str,
 
 
 def main() -> None:
+    global SCALE_MAX, GRID       # --scale-max rewrites both; see the constant's comment
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("csv", help="the CSV scripts/dev_reliability.py --out wrote")
@@ -379,7 +387,15 @@ def main() -> None:
                              "(p=1). residual_norm is the pre-registered base: ||s r|| is "
                              "what enters the prediction, so it is the quantity a "
                              "calibration should be expressed in.")
+    parser.add_argument("--scale-max", type=float, default=SCALE_MAX,
+                        help="the cap on s, default 4. It was never measured, and on "
+                             "norman:ncomb the fitted rule puts 45 of 60 conditions at "
+                             "it, so it decides that family rather than protecting it. "
+                             "Sweep it before a final run.")
     args = parser.parse_args()
+
+    SCALE_MAX = float(args.scale_max)
+    GRID = np.arange(0.0, SCALE_MAX + 0.001, 0.05)
 
     with open(args.csv, encoding="utf-8") as handle:
         raw = list(csv.DictReader(handle))
@@ -453,7 +469,8 @@ def main() -> None:
         if len({r["group"] for r in doubles}) > 1:
             keys.append(("group", "held out by fold, the stricter test"))
 
-        print(f"\n=== {family}  arm {arm}   {len(doubles)} double rows over {conditions} conditions, "
+        print(f"\n=== {family}  arm {arm}   {len(doubles)} double rows "
+              f"over {conditions} conditions, "
               f"{len({r['group'] for r in doubles})} folds ===")
         print(f"  s=0, the additive baseline: {floor:.4f}")
         print(f"  per-condition oracle:       {ceiling:.4f}  ({ceiling - floor:+.4f})   "
