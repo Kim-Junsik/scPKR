@@ -175,7 +175,14 @@ def convert(source: str, width: float) -> list:
 
         if line.startswith("|"):
             flush_paragraph(); flush_bullets()
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            # Split on UNESCAPED pipes only. A table cell containing |S| is written
+            # \| in Markdown, and splitting on every pipe turned that row into two extra
+            # cells and pushed the rest of the table off the page. The backslash itself
+            # must then go: Malgun Gothic draws U+005C as the won sign, which is correct
+            # for a Korean font and wrong for a reader.
+            body = re.sub(r"^\||\|$", "", line.strip())
+            cells = [c.strip().replace("\\|", "|").replace("\\", "")
+                     for c in re.split(r"(?<!\\)\|", body)]
             if all(set(c) <= set("-: ") and c for c in cells):   # the |---|---| rule
                 continue
             table = (table or []) + [cells]
