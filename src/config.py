@@ -92,6 +92,12 @@ DEFAULTS: dict[str, Any] = {
         "group_key": "cell_type",  # for generate_scheme=group
         "method": "additive",  # additive | combinations
         "fold": 0,
+        # Keep this fraction of the training COMBINATIONS (every single is kept). The
+        # low-data axis: whether a fixed biological dictionary makes the operator more
+        # data-efficient than one fitted from the data. Nested across fractions, so the
+        # curve is a curve and not a sequence of unrelated samples.
+        "train_condition_fraction": 1.0,
+        "train_condition_seed": 0,
     },
     "eval": {
         # power=1 is Szekely's energy distance. power=2 collapses to

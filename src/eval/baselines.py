@@ -297,6 +297,37 @@ def predict(name: str, double: str, stats: ConditionMeans,
     raise ValueError(f"unknown baseline {name!r}")
 
 
+def subsample_conditions(conditions: list[str], naming, fraction: float,
+                        seed: int) -> list[str]:
+    """Keep a deterministic `fraction` of the training COMBINATIONS, every single.
+
+    WHY COMBINATIONS AND NOT CELLS. The question this serves is whether a biological
+    dictionary makes the OPERATOR more data-efficient, and conditions are the axis that is
+    expensive to collect - many cells per condition are cheap, a new drug pair is not. It
+    is also the axis that actually separates the dictionaries: PCA observables are fitted
+    on cells with no labels, so subsampling cells would starve every arm's dictionary
+    equally while subsampling conditions starves only what A_a has to generalise from.
+
+    WHY SINGLES ARE KEPT. They anchor w_a, so dropping them would move the additive
+    baseline as well and the comparison would no longer be about the interaction term.
+
+    Deterministic in `seed` and independent of the fraction's value: the kept set at 0.25
+    is a subset of the kept set at 0.50, so the curve across fractions is nested and a
+    difference between two points is not a difference between two unrelated samples.
+    """
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError(f"split.train_condition_fraction must be in (0, 1], "
+                         f"got {fraction}")
+    if fraction == 1.0:
+        return list(conditions)
+    doubles = [c for c in conditions if naming.is_double(c)]
+    others = [c for c in conditions if not naming.is_double(c)]
+    order = np.random.default_rng(seed).permutation(len(doubles))
+    keep = {doubles[i] for i in order[:max(1, round(len(doubles) * fraction))]}
+    # Original order preserved, so nothing downstream depends on the permutation.
+    return [c for c in conditions if c in keep or c in set(others)]
+
+
 def training_conditions(stats: ConditionMeans, fold: dict, method: str) -> list[str]:
     """Conditions a model is allowed to see for this fold.
 

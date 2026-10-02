@@ -94,6 +94,14 @@ def build_model(config: dict, data, stats, fold: dict, method: str, device: str)
     the rebuild only has to get the shapes right.
     """
     train_conditions = training_conditions(stats, fold, method)
+    # Applied HERE because build_model is the only place training conditions are
+    # chosen, so the ridge fit, the observables' standardisation and the training
+    # loop all see the same reduced set. Config-driven and seeded, so a scored run
+    # reconstructs exactly the subset it was trained on.
+    train_conditions = baselines.subsample_conditions(
+        train_conditions, data.naming,
+        float(config["split"].get("train_condition_fraction", 1.0)),
+        int(config["split"].get("train_condition_seed", 0)))
     rows = training_rows(data, train_conditions)
     observables = Observables(config, data.gene_names, data.x, rows, data.perturbations)
     weights = ridge_weights(config, data, stats, train_conditions)
