@@ -37,3 +37,6 @@ assets/kegg/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Generated from docs/*.md by scripts/md_to_pdf.py; regenerate rather than commit.
+docs/*.pdf
