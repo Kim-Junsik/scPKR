@@ -367,6 +367,12 @@ def main() -> None:
                         default=["inv_residual", "ratio_add_res", "inv_obs"],
                         help="features for the one-parameter s = c f rule, which is the "
                              "form the optimum rho ||e|| / ||r|| actually takes")
+    parser.add_argument("--fit-all", action="store_true",
+                        help="also fit power(residual_norm) on the WHOLE family and print "
+                             "its coefficients. The cross-validated tables say what a rule "
+                             "is WORTH; this says which numbers the FINAL run should carry, "
+                             "because a run scored on the test set is calibrated from all "
+                             "of the validation data rather than from one held-out split.")
     parser.add_argument("--power", nargs="*", default=["residual_norm", "obs_norm"],
                         help="bases for s = c z^-p, the two-parameter family that nests a "
                              "constant scale (p=0) and a constant correction magnitude "
@@ -425,6 +431,23 @@ def main() -> None:
         floor = metric(doubles, np.zeros(len(doubles)), single)
         ceiling = metric(doubles, oracle_s, single)
         conditions = len({r["condition"] for r in doubles})
+
+        if args.fit_all:
+            # Fitted on EVERY row of this family, with nothing held out, because this is
+            # not an estimate of what the rule is worth - the tables below are - but the
+            # coefficients a final run should carry. It uses the one-exponent family and
+            # not power2 because that is the one src/models/model.py implements, and the
+            # two were within 0.002 of each other on all three families.
+            apply, description = fit_power(doubles, "residual_norm")
+            scales = apply(doubles)
+            print(f"\n=== {family}  arm {arm}  CALIBRATION FOR THE FINAL RUN ===")
+            print(f"  {description}")
+            print(f"  on all {len(doubles)} rows: metric "
+                  f"{metric(doubles, scales, single):.4f} (in-sample, so optimistic - "
+                  f"read the cross-validated tables for what it is worth)")
+            print(f"  s applied: median {np.median(scales):.3f}, "
+                  f"range {scales.min():.3f}-{scales.max():.3f}, "
+                  f"{int((scales >= 3.999).sum())}/{len(scales)} at the clip")
 
         keys = [("condition", "held out by condition")]
         if len({r["group"] for r in doubles}) > 1:
