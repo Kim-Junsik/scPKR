@@ -28,8 +28,11 @@ WHAT IS LEARNED AND WHAT IS NOT. w_a comes from a ridge over the TRAINING condit
 and is a buffer, not a parameter: it is deterministic, so it contributes no seed noise,
 and scPKFM's seed noise (0.28 L2 on combosciplex, measured from one replicate) exceeded
 every effect it spent three weeks trying to detect. Phi is fixed from KEGG. What is
-learned is A_a, W, and the head's gate - about 115 K parameters on combosciplex against
-scPKFM's 5.2 M encoder alone.
+learned is A_a, W, and the head's gate. Measured on combosciplex (G = 5,000, K = 418):
+84 K in the operators, 15 K in the head, and 2.09 M in W once the readout became dense -
+2.19 M in total, against scPKFM's 5.2 M encoder alone. The readout is 95 % of that and its
+size is set by the gene count rather than by any capacity choice; the term that actually
+carries the interaction is the 84 K of operators.
 
 WHY THE RESIDUAL IS THE WHOLE JOB. L2(ridge) = ||r_S|| identically, since ridge
 predicts m_ctrl + sum_a w_a and its error IS the residual it leaves. Table 3's 1.8577
