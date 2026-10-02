@@ -58,9 +58,17 @@ def main() -> None:
     args = parser.parse_args()
 
     for name in args.names:
-        path = os.path.join(ROOT, "results", "dev", name, "manifest.json")
-        if not os.path.exists(path):
-            print(f"{name}: no manifest - the queue has not been generated")
+        # Development queues live under results/dev/, the final runs under results/final/,
+        # and a bare name does not say which. Both are tried rather than making the caller
+        # remember: telling someone to run `dev_status.py final` and having it answer "the
+        # queue has not been generated" about a queue that exists is worse than a second
+        # stat() call.
+        candidates = [os.path.join(ROOT, "results", "dev", name, "manifest.json"),
+                      os.path.join(ROOT, "results", name, "manifest.json")]
+        path = next((p for p in candidates if os.path.exists(p)), None)
+        if path is None:
+            print(f"{name}: no manifest at "
+                  f"{' or '.join(os.path.relpath(p, ROOT) for p in candidates)}")
             continue
         with open(path, encoding="utf-8") as handle:
             jobs = json.load(handle)["jobs"]
