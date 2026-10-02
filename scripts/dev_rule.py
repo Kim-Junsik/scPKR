@@ -230,6 +230,63 @@ def fit_power(train: list[dict], name: str):
             f"s=clip({c:.3g}x{name}^-{power:.1f})")
 
 
+def fit_power2(train: list[dict], _name: str | None = None):
+    """s = clip(c ||sum_a w_a||^q ||r||^-p, 0, 4). TWO exponents, both measured.
+
+    The per-condition optimum is exactly rho ||e|| / ||r||. ||e|| is the additive
+    baseline's own error and is not available at test time, but ||sum_a w_a|| is - it comes
+    from the same ridge fit - so this family asks how much of each the data wants:
+    q is how far the additive displacement stands in for ||e||, p is how much of the
+    model's own magnitude to discard.
+
+    IT EXISTS TO AVOID A SECOND ROUND OF LEADERBOARD SHOPPING. Reading the full rule table
+    for the whitened arms produced two different winners on two families -
+    power(residual_norm) at 52 % on norman:ncomb and scaled(ratio_add_res) at 52 % on
+    norman:nval, where power managed 33 % - and picking per family from twenty rules scored
+    on the validation folds is exactly the selection problem this repository exists to
+    avoid. This family nests both: q = 0 is power(residual_norm) and q = p = 1 is
+    scaled(ratio_add_res), so the exponents are a measurement in the same sense p already
+    was.
+
+    c is fitted by wconst's weighted least squares at each (q, p) and the pair is chosen by
+    the training mean L2, all on the training split.
+    """
+    target = np.array([r["best_s"] for r in train], dtype=float)
+    weight = np.array([r["rr"] for r in train], dtype=float)
+    residual = np.array([r.get("residual_norm", np.nan) for r in train], dtype=float)
+    additive = np.array([r.get("additive_norm", np.nan) for r in train], dtype=float)
+    usable = (np.isfinite(target) & (weight > 0) & np.isfinite(residual)
+              & (residual > 1e-9) & np.isfinite(additive) & (additive > 1e-9))
+    if usable.sum() < 4:
+        return fit_const(train, None)
+
+    def feature(a: np.ndarray, r: np.ndarray, q: float, p: float) -> np.ndarray:
+        good = np.isfinite(a) & np.isfinite(r) & (a > 1e-9) & (r > 1e-9)
+        out = np.zeros(len(a))
+        out[good] = a[good] ** q * r[good] ** (-p)
+        return out
+
+    best, score = (0.0, 0.0, 0.0), np.inf
+    for q in np.arange(0.0, 1.501, 0.25):
+        for p in POWERS:
+            f = feature(additive, residual, q, p)
+            denominator = float(np.sum(weight[usable] * f[usable] ** 2))
+            if denominator <= 0.0:
+                continue
+            c = float(np.sum(weight[usable] * f[usable] * target[usable])) / denominator
+            value = float(np.mean(l2(train, np.clip(c * f, 0.0, 4.0))))
+            if value < score:
+                best, score = (q, p, c), value
+    q, p, c = best
+
+    def apply(rows: list[dict]) -> np.ndarray:
+        a = np.array([r.get("additive_norm", np.nan) for r in rows], dtype=float)
+        r = np.array([r.get("residual_norm", np.nan) for r in rows], dtype=float)
+        return np.clip(c * feature(a, r, q, p), 0.0, 4.0)
+
+    return apply, f"s=clip({c:.3g}xadd^{q:.2f}xres^-{p:.1f})"
+
+
 def fit_gate(train: list[dict], name: str):
     """s = c where z is above a threshold, 0 below it. Two parameters, both on a grid.
 
@@ -262,7 +319,7 @@ def fit_gate(train: list[dict], name: str):
 # additive baseline exactly; `const` and `wconst` are two estimators of the same single
 # global scale, and a rule has to beat the BETTER of them to have earned its slope.
 RULES = {"zero": (fit_zero, None), "const": (fit_const, None),
-         "wconst": (fit_wconst, None)}
+         "wconst": (fit_wconst, None), "power2": (fit_power2, None)}
 REFERENCES = ("zero", "const", "wconst")
 
 
