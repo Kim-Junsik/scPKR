@@ -24,16 +24,23 @@ import os
 import subprocess
 import sys
 
-import numpy as np
-import torch
-
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.data import splits
-from src.data.conventions import ConditionNaming
-from src.data.dataset import PerturbationData
-from src.eval.celleval import CONTROL_LABEL, PERT_COL, export
-from src.eval.diagnostics import load_run
+# NOTHING HEAVY AT MODULE LEVEL. --score-only reads two h5ad files and shells out to the
+# cell-eval interpreter; it uses neither torch nor the model. Importing them here anyway
+# meant the machine that only scores had to carry the whole training stack - torch,
+# scanpy, the lot - to run a step that never touches it. The export branch imports what it
+# needs, where it needs it.
+#
+# `splits`, `ConditionNaming` and `PerturbationData` were imported here and never used at
+# all; they are gone.
+#
+# These two are the column and label cell-eval expects and they are plain strings, so they
+# are restated rather than imported from src.eval.celleval, which pulls in anndata and
+# pandas. src/eval/celleval.py remains the definition; a disagreement would be caught by
+# the export failing to produce a file the scorer can read.
+PERT_COL = "target"
+CONTROL_LABEL = "non-targeting"
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CELLEVAL_WINDOWS = os.path.join(REPO_ROOT, ".env-celleval")
@@ -281,6 +288,11 @@ def main() -> None:
         # paper's eight columns were scored from a different prediction than the sixth
         # without anything saying so. There is nothing left to rebuild: Phi and the
         # additive weights are buffers and travel in the checkpoint.
+        import numpy as np
+        import torch
+        from src.eval.celleval import export
+        from src.eval.diagnostics import load_run
+
         device = "cpu" if not torch.cuda.is_available() else None
         if args.gate:
             print(f"hurdle gate overridden: {args.gate}")
