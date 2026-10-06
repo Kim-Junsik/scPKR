@@ -138,6 +138,13 @@ DEFAULTS: dict[str, Any] = {
         # 1.05, 0.98, 1.27 and 4.0, the last one clipped. The cap is what keeps the 1/||r||
         # shape from amplifying exactly the conditions it should leave alone.
         "residual_scale_max": 4.0,
+        # Cap a REALISED cell at the largest value its gene attains in the training
+        # cells. Inference-time, and it only touches the sample gate - the soft gate
+        # returns the mean and never goes through the realisation path, so every
+        # reported L2 is unaffected. Without it the sample gate emits values a hundred
+        # times anything observed (ALOX15: realised 178.87, observed maximum 1.77) and
+        # cell-eval refuses the export outright.
+        "cap_realisation": False,
         # Global magnitude correction applied AFTER decoding (predict.fit_alpha).
         # The model's predicted displacement is systematically too short - measured
         # ratio 0.646 on training singles, the conditions the loss supervises most

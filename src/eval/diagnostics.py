@@ -117,8 +117,13 @@ def build_model(config: dict, data, stats, fold: dict, method: str, device: str)
     variance = (np.where(detected, (cells - conditional_mean) ** 2, 0.0).sum(axis=0)
                 / np.maximum(counts - 1, 1))
     dispersion = torch.from_numpy(np.sqrt(np.maximum(variance, 1e-6)).astype(np.float32))
+    # The largest value each gene reaches in the cells training is allowed to see.
+    # Leak surface is the same one `rows` already defines, so a held-out condition
+    # cannot raise it.
+    ceiling = torch.from_numpy(cells.max(axis=0).astype(np.float32))
     model = PathwayKoopmanResidual(config, observables, data.n_perturbations,
-                                  weights, detection, dispersion).to(device)
+                                  weights, detection, dispersion, ceiling).to(device)
+    model.head.cap_realisation = bool(config["eval"].get("cap_realisation", False))
     return model, train_conditions, rows
 
 
@@ -147,10 +152,19 @@ def load_run(run_dir: str, device: str = "cpu", gate: str | None = None,
     # checkpoint's config cannot carry it and a scored run has to be told. Only config["eval"]
     # keys may be overridden here: anything under model or train would change what the saved
     # weights mean, and load_state_dict would either fail or quietly reinterpret them.
+    #
+    # Checked against the CURRENT defaults, not against the checkpoint's own config. An
+    # inference-time key added after a run was trained - the calibration, the realisation
+    # cap - is absent from that run's saved config by definition, so checking there
+    # rejected exactly the keys this mechanism exists to pass. A typo is still caught,
+    # since src/config.py is where every key is declared.
     if eval_overrides:
-        unknown = set(eval_overrides) - set(config["eval"])
+        from .. import config as config_module
+
+        known = set(config_module.DEFAULTS["eval"]) | set(config["eval"])
+        unknown = set(eval_overrides) - known
         if unknown:
-            raise ValueError(f"eval_overrides has keys config['eval'] does not define: "
+            raise ValueError(f"eval_overrides has keys src/config.py does not define: "
                              f"{sorted(unknown)}")
         config["eval"].update(eval_overrides)
 

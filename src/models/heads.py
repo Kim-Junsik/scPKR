@@ -198,7 +198,8 @@ class MeanPreservingHurdleHead(nn.Module):
     def __init__(self, n_genes: int, bce_weight: float = 1.0,
                  gate_mode: str = "sample", magnitude_mode: str = "gaussian",
                  detection: torch.Tensor | None = None,
-                 dispersion: torch.Tensor | None = None, q_floor: float = 1e-2):
+                 dispersion: torch.Tensor | None = None, q_floor: float = 1e-2,
+                 ceiling: torch.Tensor | None = None):
         super().__init__()
         self.bce_weight = bce_weight
         self.gate_mode = gate_mode
@@ -207,6 +208,33 @@ class MeanPreservingHurdleHead(nn.Module):
         # where that happens. The floor bounds the magnitude at 100 * mu rather than
         # letting one rare gene dominate a batch's gradient.
         self.q_floor = q_floor
+        # The largest value each gene attains in the TRAINING cells. A realised cell is
+        # capped there, at inference only.
+        #
+        # WHY IT IS NEEDED. q = sigmoid(a_g mu + b_g) and a_g starts at zero, so for a
+        # rare gene q barely moves with the cell and sits on its floor, which makes
+        # mu/q a hundred times the cell's own mean. Measured on combosciplex: ALOX15 is
+        # detected in 0.51 % of real cells and tops out at 1.77 there, and the sample
+        # gate realised it at 178.87. cell-eval refuses the file - "max value 168.96
+        # exceeds log1p threshold of 15.0" - and it is right to: that is not a cell.
+        #
+        # WHY THIS CAP AND NOT A CHOSEN NUMBER. It comes from the data, one value per
+        # gene, and nothing about it was selected to make a validator pass. It touches
+        # 0.0065 % of entries, all of them above anything the gene has ever been
+        # observed at.
+        #
+        # IT IS NOT FREE. Capping breaks the exact mean preservation on those entries,
+        # downward. The size of that is measured and reported rather than assumed; the
+        # soft gate, which every reported L2 is scored with, does not go through here
+        # at all and is untouched.
+        #
+        # Not persistent: build_model recomputes it from the training rows on every
+        # load, so putting it in the checkpoint would add a key no earlier run can
+        # supply - the mistake the whitener buffer already made once.
+        self.register_buffer("ceiling",
+                             torch.full((n_genes,), float("inf")) if ceiling is None
+                             else ceiling.clone(), persistent=False)
+        self.cap_realisation = False
         self.slope = nn.Parameter(torch.zeros(n_genes))
         rate = (torch.full((n_genes,), 0.6) if detection is None
                 else detection.clamp(q_floor, 1.0 - 1e-4))
@@ -303,12 +331,15 @@ class MeanPreservingHurdleHead(nn.Module):
             # mean slightly upward and that is the price of emitting real zeros.
             magnitude = (magnitude + torch.randn_like(magnitude)
                          * params["log_scale"].exp()).clamp(min=0.0)
+        if self.cap_realisation:
+            magnitude = torch.minimum(magnitude, self.ceiling.expand_as(magnitude))
         return gate * magnitude
 
 
 def build_head(config: dict, n_genes: int, width: int | None = None,
                detection: torch.Tensor | None = None,
-               dispersion: torch.Tensor | None = None) -> nn.Module:
+               dispersion: torch.Tensor | None = None,
+               ceiling: torch.Tensor | None = None) -> nn.Module:
     """`hurdle_link=affine` is this repository's head; `width` is for HurdleHead only.
 
     HurdleHead reads a hidden vector and invents the mean, which is what a decoder
@@ -326,7 +357,7 @@ def build_head(config: dict, n_genes: int, width: int | None = None,
         return MeanPreservingHurdleHead(n_genes, model_cfg["hurdle_bce_weight"],
                                         model_cfg["hurdle_gate"],
                                         model_cfg["hurdle_magnitude"], detection,
-                                        dispersion)
+                                        dispersion, ceiling=ceiling)
     if link == "hidden":
         if width is None:
             raise ValueError("hurdle_link=hidden needs a hidden width")

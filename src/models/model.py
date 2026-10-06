@@ -60,7 +60,8 @@ class PathwayKoopmanResidual(nn.Module):
     def __init__(self, config: dict, observables, n_perturbations: int,
                  additive: np.ndarray | None = None,
                  detection: torch.Tensor | None = None,
-                 dispersion: torch.Tensor | None = None):
+                 dispersion: torch.Tensor | None = None,
+                 ceiling: torch.Tensor | None = None):
         super().__init__()
         model_cfg = config["model"]
         self.observables = observables
@@ -124,7 +125,7 @@ class PathwayKoopmanResidual(nn.Module):
         self.operators = KoopmanOperators(config, n_perturbations, observables.dim)
         self.readout = Readout(config, observables, self.n_genes)
         self.head = build_head(config, self.n_genes, detection=detection,
-                               dispersion=dispersion)
+                               dispersion=dispersion, ceiling=ceiling)
 
     # ------------------------------------------------------------------ pieces
 

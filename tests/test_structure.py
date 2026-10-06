@@ -631,3 +631,47 @@ def test_a_checkpoint_written_before_whitening_still_loads():
     assert torch.allclose(fresh.whitener, torch.eye(fresh.matrix.shape[0]), atol=0)
     cells = torch.from_numpy(x)
     assert torch.allclose(fresh(cells), observables(cells), atol=1e-6)
+
+
+def test_the_realisation_cap_bounds_cells_and_leaves_the_mean_path_alone():
+    """A realised cell cannot exceed what its gene reaches in the training data.
+
+    Without it the sample gate emits values a hundred times anything observed, because
+    q = sigmoid(a_g mu + b_g) starts with a_g at zero and sits on its floor for a rare
+    gene, which makes mu/q enormous. Measured on combosciplex: ALOX15 is detected in
+    0.51 % of real cells and tops out at 1.77 there; the sample gate realised it at
+    178.87 and cell-eval refused the export.
+
+    The second assertion is the one that protects every reported number: the soft gate
+    returns the mean and never enters the realisation path, so the cap cannot move an L2.
+    """
+    from src.eval.predict import condition_residual
+
+    cells = control_cells()
+    ceiling = cells.max(dim=0).values
+    perturbations = [0, 1]
+
+    config = config_module.load(["model.hurdle_gate=sample", "eval.cap_realisation=true"])
+    torch.manual_seed(0)
+    capped = PathwayKoopmanResidual(config, FakeObservables(), N_PERTURBATIONS,
+                                    additive_weights(), ceiling=ceiling).eval()
+    capped.head.cap_realisation = True
+    fill_readout(capped)
+
+    with torch.no_grad():
+        drawn = torch.stack([capped.predict(cells, perturbations) for _ in range(20)])
+    assert (drawn <= ceiling + 1e-5).all(), (
+        f"a realised cell exceeded its gene's training maximum by "
+        f"{float((drawn - ceiling).max()):.3f}")
+    assert (drawn >= 0).all()
+
+    soft = config_module.load(["model.hurdle_gate=soft", "eval.cap_realisation=true"])
+    torch.manual_seed(0)
+    model = PathwayKoopmanResidual(soft, FakeObservables(), N_PERTURBATIONS,
+                                   additive_weights(), ceiling=ceiling).eval()
+    model.head.cap_realisation = True
+    fill_readout(model)
+    with torch.no_grad():
+        predicted = model.predict(cells, perturbations)
+        expected = cells + model.displacement(cells, perturbations)
+    assert torch.allclose(predicted, expected, atol=1e-5), "the cap reached the mean path"
