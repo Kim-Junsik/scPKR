@@ -180,18 +180,23 @@ if __name__ == "__main__":
 '''
 
 
-def celleval_dir(gate: str | None, alpha: str | None) -> str:
-    """The export folder for one (gate, alpha) reading of a checkpoint.
+def celleval_dir(gate: str | None, variant: str | None) -> str:
+    """The export folder for one (gate, variant) reading of a checkpoint.
 
     scripts/paper_table.py imports THIS function rather than rebuilding the name,
     because a reader that disagrees with the writer reports "no cell-eval yet" for
     an export sitting on disk, or worse joins one reading's L2 to another's columns.
-    alpha=none keeps the historical name so exports made before the option existed
+    variant=none keeps the historical name so exports made before the option existed
     still resolve.
+
+    `variant` was v1's magnitude correction and is now the residual calibration, "c,p".
+    Punctuation is replaced rather than kept: a directory named celleval_soft_a1.77,0.8
+    works on Linux and is a nuisance everywhere else, and these paths are typed by hand.
     """
     name = "celleval" if not gate else f"celleval_{gate}"
-    if alpha and alpha != "none":
-        name = f"{name}_a{alpha}"
+    if variant and variant != "none":
+        safe = str(variant).replace(",", "p").replace(".", "")
+        name = f"{name}_c{safe}"
     return name
 
 
@@ -230,13 +235,26 @@ def main() -> None:
     parser.add_argument("--max-cells", type=int, default=None,
                         help="cap cells per condition; cell-eval runs a DE test per "
                              "condition, so the full export is slow to score")
+    parser.add_argument("--calibration", default=None, metavar="C,P",
+                        help="the per-condition residual scale s = clip(c ||r||^-p, 0, "
+                             "s_max), as `dev_rule.py --fit-all` fitted it on the "
+                             "validation runs. WITHOUT IT THE RESIDUAL IS APPLIED "
+                             "UNSCALED, which is the s=1 row and not what the final "
+                             "table reports - on combosciplex the two differ by 0.157 "
+                             "of L2. It goes in the folder name for the same reason the "
+                             "gate does.")
     args = parser.parse_args()
 
-    # The gate AND the magnitude correction go in the folder name. Both change the
-    # predictions this export holds, so an export made under one must never
-    # overwrite an export made under another - that would destroy the uncorrected
-    # baseline the corrected run is being compared against, silently.
-    out_dir = os.path.join(args.run_dir, celleval_dir(args.gate, None))
+    calibration = None
+    if args.calibration:
+        c, _, p = args.calibration.partition(",")
+        calibration = {"residual_coefficient": float(c), "residual_power": float(p)}
+
+    # The gate AND the calibration go in the folder name. Both change the predictions
+    # this export holds, so an export made under one must never overwrite an export made
+    # under another - that would destroy the uncalibrated baseline the calibrated run is
+    # being compared against, silently.
+    out_dir = os.path.join(args.run_dir, celleval_dir(args.gate, args.calibration))
     interpreter = None
     if not args.export_only:
         # Resolved and probed BEFORE the export, so a broken environment costs
@@ -271,7 +289,11 @@ def main() -> None:
             args.run_dir, device or torch.load(
                 checkpoint_path, map_location="cpu",
                 weights_only=False)["config"]["train"]["device"],
-            gate=args.gate)
+            gate=args.gate, eval_overrides=calibration)
+        if calibration:
+            print(f"calibration applied: s = clip({calibration['residual_coefficient']}"
+                  f" ||r||^-{calibration['residual_power']}, 0, "
+                  f"{model.residual_scale_max})")
 
         genes = None
         if args.infer_top_gene:

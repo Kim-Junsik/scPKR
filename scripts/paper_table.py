@@ -56,7 +56,8 @@ NOT_COMPUTABLE = ["Pears_dhat", "Pears_dhat20"]
 
 
 def celleval_means(run_dir: str, gate: str | None = None,
-                   group: str = "double") -> dict[str, str] | None:
+                   group: str = "double",
+                   calibration: str | None = None) -> dict[str, str] | None:
     """Reads the scoring produced under the SAME gate the L2 pass will use.
 
     run_celleval.py writes to celleval_<gate>[_a<alpha>]/, and the name is built by
@@ -75,7 +76,7 @@ def celleval_means(run_dir: str, gate: str | None = None,
     The two agree exactly when nothing is filtered: checked on an additive run,
     all five metrics identical to 1e-16.
     """
-    path = os.path.join(run_dir, celleval_dir(gate, None), "results.csv")
+    path = os.path.join(run_dir, celleval_dir(gate, calibration), "results.csv")
     if not os.path.exists(path):
         return None
     # celleval labels a double 'A+B' and a single 'A' (celleval.to_celleval_label),
@@ -105,14 +106,20 @@ def celleval_means(run_dir: str, gate: str | None = None,
 
 
 def compute_l2(run_dir: str, device: str, n_cells: int, gate: str | None = None,
-               infer_top_gene: int | None = None, group: str = "double") -> float:
+               infer_top_gene: int | None = None, group: str = "double",
+               calibration: str | None = None) -> float:
     """Eq. (15) over the fold's test doubles - the same conditions resid_R2 uses.
 
     `infer_top_gene` restricts the gene space to the subset scDFM scores on, which
     is the only way the L2 columns compare: theirs is 1,000 scanpy-HVG genes of
     the test subset, ours is every gene in the cache.
     """
-    config, data, stats, fold, model = load_run(run_dir, device, gate)
+    overrides = None
+    if calibration:
+        c, _, p = calibration.partition(",")
+        overrides = {"residual_coefficient": float(c), "residual_power": float(p)}
+    config, data, stats, fold, model = load_run(run_dir, device, gate,
+                                                eval_overrides=overrides)
     rng = np.random.default_rng(config["eval"]["seed"])
     conditions = condition_groups(data, stats, fold, config["split"]["method"])
     genes = scdfm_eval_genes(data, fold, infer_top_gene) if infer_top_gene else None
@@ -160,6 +167,14 @@ def main() -> None:
                              "out the singles of every held-out gene, and the "
                              "literature reports Single and Double as separate "
                              "blocks - run this twice to fill both.")
+    parser.add_argument("--calibration", default=None, metavar="C,P",
+                        help="the per-condition residual scale this table reports, "
+                             "c,p for s = clip(c ||r||^-p, 0, s_max). It is applied to "
+                             "the L2 pass AND used to pick the cell-eval export folder, "
+                             "so the two halves of every row come from one reading of "
+                             "the checkpoint. Must match what run_celleval.py was given: "
+                             "a reader that disagrees with the writer reports 'no "
+                             "cell-eval yet' for an export sitting on disk.")
     parser.add_argument("--csv", default=None, help="also write the table here")
     args = parser.parse_args()
 
@@ -188,10 +203,10 @@ def main() -> None:
     table = []
     for run_dir in runs:
         name = os.path.basename(run_dir.rstrip("/\\"))
-        values = celleval_means(run_dir, args.gate, args.group)
+        values = celleval_means(run_dir, args.gate, args.group, args.calibration)
         l2 = (float("nan") if args.no_l2 else
               compute_l2(run_dir, args.device, args.n_cells, args.gate,
-                         args.infer_top_gene, args.group))
+                         args.infer_top_gene, args.group, args.calibration))
 
         cells = [f"{l2:12.4f}" if np.isfinite(l2) else f"{'-':>12s}"]
         record = {"run": name, "L2": l2}
