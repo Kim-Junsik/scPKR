@@ -242,6 +242,14 @@ def main() -> None:
     parser.add_argument("--max-cells", type=int, default=None,
                         help="cap cells per condition; cell-eval runs a DE test per "
                              "condition, so the full export is slow to score")
+    parser.add_argument("--realisation", default="gamma",
+                        choices=["gamma", "clamped_gaussian"],
+                        help="how a realised magnitude is drawn. gamma matches the mean "
+                             "and variance exactly with a positive distribution; "
+                             "clamped_gaussian is what training assumes and biases the "
+                             "realised mean upward - measured at 1.8545 against gamma's "
+                             "1.5348 on L2, where the stated mean scores 1.4532. The "
+                             "default is the measurement, not the newer option.")
     parser.add_argument("--no-cap", action="store_true",
                         help="do NOT cap a realised cell at its gene's training maximum. "
                              "The cap is on by default for --gate sample because without "
@@ -269,9 +277,16 @@ def main() -> None:
     # emits values a hundred times anything the gene has ever been observed at and
     # cell-eval refuses the file. It is turned on by default HERE rather than in
     # src/config.py so that training and every L2 are left exactly as they were.
-    if args.gate == "sample" and not args.no_cap:
+    if args.gate == "sample":
         calibration = dict(calibration or {})
-        calibration["cap_realisation"] = True
+        if not args.no_cap:
+            calibration["cap_realisation"] = True
+        # The default is gamma because it was measured to be better, not because it is
+        # newer. On final_norman_additive_f0_s0, L2 against the true condition means at
+        # 4,096 cells: 1.8545 with the clamped draw against 1.5348 with gamma, where the
+        # mean the model states scores 1.4532. The clamp was biasing every realised cell
+        # upward, which cost the distribution metrics as well as this one.
+        calibration["realisation"] = args.realisation
 
     # The gate AND the calibration go in the folder name. Both change the predictions
     # this export holds, so an export made under one must never overwrite an export made

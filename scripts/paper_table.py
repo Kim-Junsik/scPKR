@@ -107,17 +107,23 @@ def celleval_means(run_dir: str, gate: str | None = None,
 
 def compute_l2(run_dir: str, device: str, n_cells: int, gate: str | None = None,
                infer_top_gene: int | None = None, group: str = "double",
-               calibration: str | None = None) -> float:
+               calibration: str | None = None,
+               realisation: str = "gamma") -> float:
     """Eq. (15) over the fold's test doubles - the same conditions resid_R2 uses.
 
     `infer_top_gene` restricts the gene space to the subset scDFM scores on, which
     is the only way the L2 columns compare: theirs is 1,000 scanpy-HVG genes of
     the test subset, ours is every gene in the cache.
     """
-    overrides = None
+    overrides = {}
     if calibration:
         c, _, p = calibration.partition(",")
         overrides = {"residual_coefficient": float(c), "residual_power": float(p)}
+    if gate == "sample":
+        # Matched to what run_celleval.py exported with, so the L2 in a row and the
+        # cell-eval columns beside it come from the same prediction.
+        overrides["cap_realisation"] = True
+        overrides["realisation"] = realisation
     config, data, stats, fold, model = load_run(run_dir, device, gate,
                                                 eval_overrides=overrides)
     rng = np.random.default_rng(config["eval"]["seed"])
@@ -167,6 +173,10 @@ def main() -> None:
                              "out the singles of every held-out gene, and the "
                              "literature reports Single and Double as separate "
                              "blocks - run this twice to fill both.")
+    parser.add_argument("--realisation", default="gamma",
+                        choices=["gamma", "clamped_gaussian"],
+                        help="must match what run_celleval.py exported with; it only "
+                             "applies to --gate sample")
     parser.add_argument("--calibration", default=None, metavar="C,P",
                         help="the per-condition residual scale this table reports, "
                              "c,p for s = clip(c ||r||^-p, 0, s_max). It is applied to "
@@ -206,7 +216,8 @@ def main() -> None:
         values = celleval_means(run_dir, args.gate, args.group, args.calibration)
         l2 = (float("nan") if args.no_l2 else
               compute_l2(run_dir, args.device, args.n_cells, args.gate,
-                         args.infer_top_gene, args.group, args.calibration))
+                         args.infer_top_gene, args.group, args.calibration,
+                         args.realisation))
 
         cells = [f"{l2:12.4f}" if np.isfinite(l2) else f"{'-':>12s}"]
         record = {"run": name, "L2": l2}
