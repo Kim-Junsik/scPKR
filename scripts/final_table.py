@@ -68,7 +68,8 @@ BLOCKS = {
 
 
 def score_run(run_dir: str, device: str, n_cells: int,
-              calibration: tuple[float, float] | None) -> dict[str, float]:
+              calibration: tuple[float, float] | None,
+              gate: str = "soft") -> dict[str, float]:
     """L2 on the TEST conditions, on the reported protocol, split into blocks.
 
     The same protocol scripts/dev_score.py uses on validation: the scanpy HVG of the test
@@ -82,7 +83,7 @@ def score_run(run_dir: str, device: str, n_cells: int,
     if calibration is not None:
         overrides = {"residual_coefficient": calibration[0],
                      "residual_power": calibration[1]}
-    config, data, stats, fold, model = load_run(run_dir, device, "soft",
+    config, data, stats, fold, model = load_run(run_dir, device, gate,
                                                 eval_overrides=overrides)
     rng = np.random.default_rng(config["eval"]["seed"])
     groups = condition_groups(data, stats, fold, config["split"]["method"])
@@ -119,6 +120,16 @@ def main() -> None:
     parser.add_argument("--calibration", nargs="*", default=[],
                         help="dataset:method=c,p from dev_rule.py --fit-all")
     parser.add_argument("--score-the-test", action="store_true")
+    parser.add_argument("--gate", default="soft", choices=["soft", "hard", "sample"],
+                        help="how the hurdle head realises the binary event. `soft` "
+                             "returns the population MEAN exactly, which is what an L2 "
+                             "between means wants. `sample` draws a realised cell and "
+                             "clamps it at zero, which is what a DISTRIBUTION metric "
+                             "wants - cell-eval 0.8.1 rejects a soft export outright, "
+                             "`Invalid scale: min value -2.63 is negative`, because a "
+                             "mean vector is not a cell. The clamp makes `sample` "
+                             "slightly biased upward, so the two gates are compared here "
+                             "rather than assumed interchangeable.")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--n-cells", type=int, default=1024)
     parser.add_argument("--csv", default=None)
@@ -150,10 +161,11 @@ def main() -> None:
                                ("calibrated", calibration.get(key))):
             if label == "calibrated" and setting is None:
                 continue
-            scored = score_run(run_dir, args.device, args.n_cells, setting)
+            scored = score_run(run_dir, args.device, args.n_cells, setting, args.gate)
             records.append({"tag": job["tag"], "dataset": job["dataset"],
                             "method": job["method"], "fold": job["fold"],
-                            "seed": job["seed"], "setting": label, **scored})
+                            "seed": job["seed"], "setting": label,
+                            "gate": args.gate, **scored})
         print(f"  {job['tag']:36s} scored")
 
     if args.csv:
