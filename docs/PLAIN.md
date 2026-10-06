@@ -109,7 +109,7 @@ A의 효과를 벡터 하나로, B의 효과를 벡터 하나로 적어 두고 *
 | Pearson Δ | 변화 방향의 상관 | 0승 |
 | DS | 분포 구별 점수 | 1승 |
 | DE-Spearman | 차등발현 순위 | 미측정 |
-| Pearson Δ̂, Δ̂20 | — | 이 분할에서 계산 불가 |
+| Pearson delta-hat, delta-hat20 | — | 이 분할에서 계산 불가 |
 
 L2 네 표 전부에서 발표된 **여덟 개 모델 전부**를 이긴다 (scGPT, Geneformer, GEARS, CPA,
 STATE, CellFlow, scDFM, 그리고 논문들의 Additive).
