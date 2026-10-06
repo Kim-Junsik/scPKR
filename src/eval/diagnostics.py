@@ -124,6 +124,7 @@ def build_model(config: dict, data, stats, fold: dict, method: str, device: str)
     model = PathwayKoopmanResidual(config, observables, data.n_perturbations,
                                   weights, detection, dispersion, ceiling).to(device)
     model.head.cap_realisation = bool(config["eval"].get("cap_realisation", False))
+    model.head.realisation = str(config["eval"].get("realisation", "clamped_gaussian"))
     return model, train_conditions, rows
 
 

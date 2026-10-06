@@ -675,3 +675,31 @@ def test_the_realisation_cap_bounds_cells_and_leaves_the_mean_path_alone():
         predicted = model.predict(cells, perturbations)
         expected = cells + model.displacement(cells, perturbations)
     assert torch.allclose(predicted, expected, atol=1e-5), "the cap reached the mean path"
+
+
+@pytest.mark.parametrize("mean,spread", [(1.0, 0.5), (1.0, 2.0), (0.05, 0.3), (0.2, 1.5)])
+def test_the_gamma_realisation_keeps_the_mean_and_the_clamped_one_does_not(mean, spread):
+    """The realisation must not move the mean the model states.
+
+    "Zero-mean noise, so the estimate stays unbiased" was the comment on the clamped
+    draw, and it was wrong the moment the clamp was added: E[max(0, m + e)] > m, badly
+    when the spread exceeds the mean - which is the ordinary case for a sparse gene.
+    Measured on a real run, L2 against the true condition means converged to 1.8504 by
+    16,384 cells where the model's own stated mean scores 1.4532. That 0.40 is bias and
+    no number of cells removes it.
+
+    Gamma(k, 1/theta) with k = (m/s)^2 and theta = s^2/m has mean m and variance s^2
+    exactly, and is positive without a clamp.
+    """
+    torch.manual_seed(0)
+    m = torch.full((200000,), mean)
+    s = torch.full((200000,), spread)
+    gamma = torch.distributions.Gamma((m / s) ** 2, m / s ** 2).sample()
+    clamped = (m + torch.randn_like(m) * s).clamp(min=0.0)
+
+    assert abs(float(gamma.mean()) - mean) < 0.01 * max(mean, spread)
+    assert abs(float(gamma.std()) - spread) < 0.02 * spread
+    if spread > mean:
+        assert float(clamped.mean()) > mean * 1.1, (
+            "the clamped draw must be visibly biased here, or this test is not "
+            "measuring what it claims")

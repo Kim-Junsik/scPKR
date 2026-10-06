@@ -145,6 +145,11 @@ DEFAULTS: dict[str, Any] = {
         # times anything observed (ALOX15: realised 178.87, observed maximum 1.77) and
         # cell-eval refuses the export outright.
         "cap_realisation": False,
+        # clamped_gaussian | gamma. How a realised magnitude is drawn, at inference only.
+        # The clamp in clamped_gaussian biases the realised mean upward by 0.40 of L2,
+        # measured and converged; gamma matches the same mean and variance with a
+        # distribution that is already positive and so has no clamp to bias.
+        "realisation": "clamped_gaussian",
         # Global magnitude correction applied AFTER decoding (predict.fit_alpha).
         # The model's predicted displacement is systematically too short - measured
         # ratio 0.646 on training singles, the conditions the loss supervises most

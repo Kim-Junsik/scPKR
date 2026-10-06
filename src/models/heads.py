@@ -235,6 +235,11 @@ class MeanPreservingHurdleHead(nn.Module):
                              torch.full((n_genes,), float("inf")) if ceiling is None
                              else ceiling.clone(), persistent=False)
         self.cap_realisation = False
+        # How a magnitude is drawn at inference. "clamped_gaussian" is what training
+        # assumes; "gamma" matches the same mean and variance with a distribution that is
+        # positive to begin with. Inference-time only - the likelihood in loss() is
+        # unchanged, so no run has to be retrained to try it.
+        self.realisation = "clamped_gaussian"
         self.slope = nn.Parameter(torch.zeros(n_genes))
         rate = (torch.full((n_genes,), 0.6) if detection is None
                 else detection.clamp(q_floor, 1.0 - 1e-4))
@@ -326,11 +331,30 @@ class MeanPreservingHurdleHead(nn.Module):
         else:
             raise ValueError(f"unknown hurdle gate_mode {self.gate_mode!r}")
         if self.magnitude_mode == "gaussian" and self.gate_mode == "sample":
-            # Zero-mean noise, so the estimate stays unbiased for the mean. Clamped at
-            # zero because log1p values cannot be negative; the clamp does bias the
-            # mean slightly upward and that is the price of emitting real zeros.
-            magnitude = (magnitude + torch.randn_like(magnitude)
-                         * params["log_scale"].exp()).clamp(min=0.0)
+            spread = params["log_scale"].exp().clamp(min=1e-6)
+            if self.realisation == "gamma":
+                # Mean m and variance s^2 exactly, from a distribution that is positive
+                # by construction: Gamma(k, 1/theta) with k = (m/s)^2 and theta = s^2/m
+                # has mean k*theta = m. Nothing is clamped, so nothing is biased.
+                #
+                # WHY IT IS NEEDED. "Zero-mean noise, so the estimate stays unbiased"
+                # was wrong once the clamp was applied: E[max(0, m + e)] > m, and the
+                # gap is not small. Measured on final_norman_additive_f0_s0, L2 against
+                # the true condition means, as the cell count grows:
+                #   soft 1.4532; sampled 1.9806 at 256 cells, 1.8676 at 1024, 1.8518 at
+                #   4096, 1.8504 at 16384.
+                # It converges, and it converges 0.40 ABOVE the mean the model states.
+                # That is bias, not Monte Carlo error, and no number of cells removes it.
+                mean = magnitude.clamp(min=1e-6)
+                concentration = (mean / spread) ** 2
+                rate = mean / spread ** 2
+                magnitude = torch.distributions.Gamma(
+                    concentration.clamp(min=1e-4), rate.clamp(min=1e-8)).sample()
+            else:
+                # What training assumes. Clamped at zero because log1p values cannot be
+                # negative, and that clamp is where the bias above comes from.
+                magnitude = (magnitude + torch.randn_like(magnitude)
+                             * spread).clamp(min=0.0)
         if self.cap_realisation:
             magnitude = torch.minimum(magnitude, self.ceiling.expand_as(magnitude))
         return gate * magnitude
