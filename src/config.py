@@ -150,6 +150,10 @@ DEFAULTS: dict[str, Any] = {
         # measured and converged; gamma matches the same mean and variance with a
         # distribution that is already positive and so has no clamp to bias.
         "realisation": "clamped_gaussian",
+        # Lower bound on the hurdle's detection probability, at inference. None keeps
+        # whatever the run was trained with (1e-2). It bounds a realised magnitude at
+        # mu/q_floor and provably cannot move the mean, since q * (mu/q) = mu for any q.
+        "hurdle_q_floor": None,
         # Global magnitude correction applied AFTER decoding (predict.fit_alpha).
         # The model's predicted displacement is systematically too short - measured
         # ratio 0.646 on training singles, the conditions the loss supervises most

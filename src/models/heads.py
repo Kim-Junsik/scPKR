@@ -274,6 +274,16 @@ class MeanPreservingHurdleHead(nn.Module):
         model's favour on the metric. The clamp belongs in point_estimate, on sampled
         magnitudes, which is where it already was.
         """
+        # The floor is read at call time, not baked in at construction, so that a run
+        # trained with one can be SCORED with another. mu/q is bounded by mu/q_floor, and
+        # the mean is q * (mu/q) = mu for any q at all, so raising it trades a realised
+        # cell's size against how often the gene is non-zero and cannot move the mean.
+        #
+        # 1e-2 lets the magnitude reach 100 mu. On ComboSciPlex that is not hypothetical:
+        # uncapped, the sampled L2 is 465.66 against 1.60 for the mean the model states,
+        # and the cap that makes the export valid then destroys the mean while truncating
+        # it - 2.27, with 98.6 % of the damage on genes whose predicted mean is POSITIVE,
+        # so it is the size of the magnitude and not the negative predictions.
         q = torch.sigmoid(self.slope * mean + self.intercept).clamp(self.q_floor, 1.0)
         params = {"mean": mean, "q": q, "magnitude": mean / q}
         if self.magnitude_mode == "gaussian":
